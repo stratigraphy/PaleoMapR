@@ -1,0 +1,74 @@
+cff-version: 1.2.0
+message: "If you use PaleoMapR, please cite it as below, and also cite the data behind your maps (PaleoDEMs, PaleoCoastlines, PBDB, Macrostrat, HadCM3L)."
+type: software
+title: "PaleoMapR: Point-and-Click Editor for Fossil-Corrected Paleogeographic Maps"
+version: 0.1.0
+date-released: 2026-11-05
+license: GPL-2.0-or-later
+repository-code: "https://github.com/stratigraphy/PaleoMapR"
+url: "https://stratigraphy.github.io/PaleoMapR/"
+keywords:
+  - paleogeography
+  - paleoclimate
+  - PaleoDEM
+  - Paleobiology Database
+  - plate reconstruction
+  - GPlates
+  - R
+  - shiny
+authors:
+  - family-names: Arts
+    given-names: Michiel
+    orcid: "https://orcid.org/0000-0003-3181-4608"
+references:
+  - type: data
+    title: "PALEOMAP Paleodigital Elevation Models (PaleoDEMS) for the Phanerozoic"
+    authors:
+      - family-names: Scotese
+        given-names: Christopher R.
+      - family-names: Wright
+        given-names: Nicky
+    year: 2018
+    url: "https://www.earthbyte.org/paleodem-resource-scotese-and-wright-2018/"
+  - type: article
+    title: "Mapping paleocoastlines and continental flooding during the Phanerozoic"
+    authors:
+      - family-names: Kocsis
+        given-names: Ádám T.
+      - family-names: Scotese
+        given-names: Christopher R.
+    journal: "Earth-Science Reviews"
+    volume: 213
+    start: 103463
+    year: 2021
+    doi: "10.1016/j.earscirev.2020.103463"
+  - type: article
+    title: "Macrostrat: a platform for geological data integration and deep-time Earth crust research"
+    authors:
+      - family-names: Peters
+        given-names: Shanan E.
+      - family-names: Husson
+        given-names: Jon M.
+      - family-names: Czaplewski
+        given-names: John
+    journal: "Geochemistry, Geophysics, Geosystems"
+    volume: 19
+    start: 1393
+    end: 1409
+    year: 2018
+    doi: "10.1029/2018GC007467"
+  - type: article
+    title: "Deep ocean temperatures through time"
+    authors:
+      - family-names: Valdes
+        given-names: Paul J.
+      - family-names: Scotese
+        given-names: Christopher R.
+      - family-names: Lunt
+        given-names: Daniel J.
+    journal: "Climate of the Past"
+    volume: 17
+    start: 1483
+    end: 1506
+    year: 2021
+    doi: "10.5194/cp-17-1483-2021"

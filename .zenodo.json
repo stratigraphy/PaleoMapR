@@ -1,0 +1,35 @@
+{
+  "title": "PaleoMapR: Point-and-Click Editor for Fossil-Corrected Paleogeographic Maps",
+  "upload_type": "software",
+  "description": "<p>PaleoMapR is a point-and-click editor for paleogeographic maps that runs in the web browser on your own computer. It checks the PALEOMAP PaleoDEMs (Scotese and Wright 2018) against fossil collections of the Paleobiology Database, Macrostrat rock units and your own points, rebuilds fossil-corrected elevation grids in which marine records lie in the sea and land records on land, and draws publication maps (PNG and vector PDF) with climate layers from the HadCM3L simulations of Valdes et al. (2021).</p>",
+  "creators": [
+    {
+      "name": "Arts, Michiel",
+      "orcid": "0000-0003-3181-4608"
+    }
+  ],
+  "license": "GPL-2.0-or-later",
+  "keywords": ["paleogeography", "paleoclimate", "PaleoDEM", "Paleobiology Database", "plate reconstruction", "GPlates", "R", "shiny"],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/stratigraphy/PaleoMapR",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    },
+    {
+      "identifier": "10.1016/j.earscirev.2020.103463",
+      "relation": "references",
+      "scheme": "doi"
+    },
+    {
+      "identifier": "10.5194/cp-17-1483-2021",
+      "relation": "references",
+      "scheme": "doi"
+    },
+    {
+      "identifier": "10.1029/2018GC007467",
+      "relation": "references",
+      "scheme": "doi"
+    }
+  ]
+}

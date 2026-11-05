@@ -1,0 +1,28 @@
+name: Feature request
+description: A data set, layer or option that is missing, or an idea to make the editor easier
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: The change, and what you would use it for.
+    validations:
+      required: true
+  - type: textarea
+    id: reference
+    attributes:
+      label: Reference
+      description: Data set, method paper, an example map, or a screenshot.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Setup / installation
+        - Map editor (records, points, rebuilding)
+        - Corrected grids (the correction itself)
+        - Figure tab (projections, layout, symbols)
+        - Climate layers
+        - Plate models
+        - Other

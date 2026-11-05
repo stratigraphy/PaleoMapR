@@ -1,0 +1,35 @@
+Package: PaleoMapR
+Type: Package
+Title: Point-and-Click Editor for Fossil-Corrected Paleogeographic Maps
+Version: 0.1.0
+Authors@R: person(given = "Michiel", family = "Arts", role = c("aut", "cre"),
+    email = "michiel.arts@stratigraphy.eu", comment = c(ORCID = "0000-0003-3181-4608"))
+Description: Opens a 'shiny' application in the web browser that checks the
+    PALEOMAP paleodigital elevation models (Scotese and Wright (2018)
+    <https://www.earthbyte.org/paleodem-resource-scotese-and-wright-2018/>)
+    against fossil collections from the Paleobiology Database, rock units from
+    Macrostrat (Peters et al. (2018) <doi:10.1029/2018GC007467>) and the
+    user's own points, and rebuilds fossil-corrected elevation grids in which
+    marine records lie in the sea and terrestrial records on land, starting
+    from the paleocoastlines of Kocsis and Scotese (2021)
+    <doi:10.1016/j.earscirev.2020.103463>. Publication maps of the corrected
+    grids are drawn as PNG and vector PDF in many projections, as whole maps,
+    zoomed-in areas or composites, with localities and with climate layers
+    from the HadCM3L simulations of Valdes et al. (2021)
+    <doi:10.5194/cp-17-1483-2021>. Plate rotations use 'pyGPlates' (Mueller
+    et al. (2018) <doi:10.1029/2018GC007584>) through 'reticulate'. Points,
+    edits and settings are plain text files in a working folder.
+License: GPL (>= 2)
+URL: https://github.com/stratigraphy/PaleoMapR, https://stratigraphy.github.io/PaleoMapR/
+BugReports: https://github.com/stratigraphy/PaleoMapR/issues
+Encoding: UTF-8
+Depends: R (>= 4.2.0)
+Imports: shiny (>= 1.7.0), DT, terra, sf, ncdf4, RANN, png, jsonlite, readxl,
+    reticulate (>= 1.38), callr, later, parallel, tools, utils
+Suggests: testthat (>= 3.1.5)
+Config/testthat/edition: 3
+Config/Needs/website: rmarkdown
+SystemRequirements: Python 3.10-3.12 with pyGPlates (installed by
+    pm_setup()); internet access for the one-time data download (about 1 GB)
+NeedsCompilation: no
+Config/roxygen2/version: 8.1.1

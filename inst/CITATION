@@ -1,0 +1,12 @@
+citHeader("To cite PaleoMapR in publications please use the reference below, and also cite the data behind your maps (PaleoDEMs, PaleoCoastlines, PBDB, Macrostrat, HadCM3L; see the About tab of the editor or https://stratigraphy.github.io/PaleoMapR/articles/data-sources.html).")
+
+bibentry(
+  bibtype = "Manual",
+  title   = "PaleoMapR: Point-and-Click Editor for Fossil-Corrected Paleogeographic Maps",
+  author  = person("Michiel", "Arts", comment = c(ORCID = "0000-0003-3181-4608")),
+  year    = "2026",
+  note    = paste("R package version", meta$Version),
+  url     = "https://github.com/stratigraphy/PaleoMapR",
+  textVersion = paste0("Arts, M. (2026). PaleoMapR: Point-and-Click Editor for Fossil-Corrected Paleogeographic Maps. ",
+                       "R package version ", meta$Version, ". https://github.com/stratigraphy/PaleoMapR")
+)

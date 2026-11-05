@@ -1,0 +1,34 @@
+name: Bug report
+description: Something does not work, gives an error or a wrong map
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. PaleoMapR is in alpha, so every report helps.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do (tab, map age, plate model, button or settings), what did you expect, and what did you get?
+    validations:
+      required: true
+  - type: textarea
+    id: message
+    attributes:
+      label: Message
+      description: The message in the status line, the R console or state/setup_log.txt, if there was one. For a failed figure, maps/last_render_error.txt.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: PaleoMapR version (title bar or About tab), R version and operating system.
+      placeholder: "PaleoMapR 0.1.0, R 4.5.2, Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Files
+      description: If the problem depends on your points, attach points/user_points.csv and points/record_edits.csv (drag them into this box), or a screenshot.

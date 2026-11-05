@@ -1,0 +1,15 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+docs/
+*.Rcheck/
+*.tar.gz
+launcher/state/
+launcher/local_source.txt
+launcher/start_app.vbs
+launcher/data/
+launcher/models/
+launcher/points/
+launcher/maps/
+launcher/results/

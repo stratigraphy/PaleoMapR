@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and show-and-tell
+    url: https://github.com/stratigraphy/PaleoMapR/discussions
+    about: How do I ...? Or show a map you made with PaleoMapR.
+  - name: Manual and tutorial
+    url: https://stratigraphy.github.io/PaleoMapR/
+    about: Setup, the Map editor and the Figure tab step by step.

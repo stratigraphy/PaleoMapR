@@ -1,0 +1,79 @@
+---
+title: "Where the data come from and what to cite"
+---
+
+PaleoMapR contains no data. The setup downloads the open data sets below from their sources into the working
+folder; they keep their own licences and citation requests. If you publish maps made with PaleoMapR, please cite
+PaleoMapR (`citation("PaleoMapR")`) and the data behind the maps.
+
+## Elevation, coastlines and records
+
+* **PaleoDEMs and the PALEOMAP plate model.** 109 paleodigital elevation models, 0–540 Ma every 5 Myr, on a 0.2°
+  grid (about 22 km); nothing finer exists in the source. Scotese, C. R. and Wright, N. (2018). PALEOMAP
+  Paleodigital Elevation Models (PaleoDEMS) for the Phanerozoic. PALEOMAP Project.
+  <https://www.earthbyte.org/paleodem-resource-scotese-and-wright-2018/>
+* **PaleoCoastlines** (version 7.2, Zenodo record 7828387): the PBDB-adjusted shorelines that the correction
+  starts from. Kocsis, Á. T. and Scotese, C. R. (2021). Mapping paleocoastlines and continental flooding during the
+  Phanerozoic. *Earth-Science Reviews* 213, 103463. <https://doi.org/10.1016/j.earscirev.2020.103463>
+* **Fossil records:** The Paleobiology Database, <https://paleobiodb.org>, downloaded through its data service
+  (API 1.2). For each map age only collections whose age range covers that age ± 2.5 Myr are used; collections
+  spanning more than 12 Myr are left out.
+* **Rock units:** Peters, S. E., Husson, J. M. and Czaplewski, J. (2018). Macrostrat: a platform for geological
+  data integration and deep-time Earth crust research. *Geochemistry, Geophysics, Geosystems* 19, 1393–1409.
+  <https://doi.org/10.1029/2018GC007467>
+* **Sea level:** van der Meer, D. G., Scotese, C. R., Mills, B. J. W., Sluijs, A., van den Berg van Saparoea,
+  A. P. and van de Weg, R. M. B. (2022). Long-term Phanerozoic global mean sea level: insights from strontium
+  isotope variations and estimates of continental glaciation. *Gondwana Research* 111, 103–121.
+  <https://doi.org/10.1016/j.gr.2022.07.014>
+* **Present-day borders and coastlines:** Natural Earth (public domain), <https://www.naturalearthdata.com>
+
+## Plate models and rotations
+
+* **Rotations:** GPlates / pyGPlates. Müller, R. D. et al. (2018). GPlates: building a virtual Earth through deep
+  time. *Geochemistry, Geophysics, Geosystems* 19, 2243–2261. <https://doi.org/10.1029/2018GC007584>
+* **Other plate models, if you use them:** Merdith, A. S. et al. (2021). Extending full-plate tectonic models into
+  deep time: linking the Neoproterozoic and the Phanerozoic. *Earth-Science Reviews* 214, 103477.
+  <https://doi.org/10.1016/j.earscirev.2020.103477> · Torsvik, T. H. and Cocks, L. R. M. (2017). *Earth History
+  and Palaeogeography*. Cambridge University Press. · The Golonka model as distributed by EarthByte (see
+  `models/golonka/readme.txt` in the working folder).
+
+## Climate
+
+PaleoMapR does not run a climate model. The climate layers are the output of the **HadCM3L** coupled
+atmosphere–ocean general circulation model (version HadCM3BL-M2.1aD; Valdes et al. 2017), run by the BRIDGE group
+of the University of Bristol for **Valdes, Scotese & Lunt (2021)**. The series is **scotese_02**: 109 simulations
+from 541 Ma to 0 Ma on the PALEOMAP palaeogeographies of Scotese & Wright (2018), the same maps as the PaleoDEMs,
+with atmospheric CO<sub>2</sub> after Foster, Royer & Lunt (2017). The run IDs go from `texqe` (541 Ma) to
+`texpa1` (0 Ma). The Silurian runs:
+
+| Map age | HadCM3L run | Run age | CO<sub>2</sub> of the run |
+|---|---|---|---|
+| 445 Ma | teXPl | 444.5 Ma | 1708 ppm |
+| 440 Ma | teXPk | 441.2 Ma | 1643 ppm |
+| 435 Ma | teXPj | 436.0 Ma | 1576 ppm |
+| 430 Ma | teXPi | 430.4 Ma | 1531 ppm |
+| 425 Ma | teXPh | 425.2 Ma | 1490 ppm |
+| 420 Ma | teXPg | 421.1 Ma | 1457 ppm |
+| 415 Ma | teXPf | 415.0 Ma | 1579 ppm |
+
+For any map age the run closest in age is used, and the caption of every figure names the run, its age and
+CO<sub>2</sub>. The files (`<run>a.pdcl<season>.nc` atmosphere, `<run>o.pfcl<season>.nc` ocean) are the
+climatological means on the BRIDGE server, `https://www.paleo.bristol.ac.uk/ummodel/data/<run>/climate/`. The
+origin was checked against the BRIDGE run list of the series
+(<https://www.paleo.bristol.ac.uk/ummodel/scripts/html_bridge/scotese_02.html>) and the PhanDA HadCM3L
+model-prior record on Zenodo (<https://zenodo.org/record/8237751>), which lists scotese_02 as originally
+published in Valdes et al. (2021).
+
+* **Climate:** Valdes, P. J., Scotese, C. R. and Lunt, D. J. (2021). Deep ocean temperatures through time.
+  *Climate of the Past* 17, 1483–1506. <https://doi.org/10.5194/cp-17-1483-2021>
+* **Climate model:** Valdes, P. J. et al. (2017). The BRIDGE HadCM3 family of climate models: HadCM3@Bristol v1.0.
+  *Geoscientific Model Development* 10, 3715–3743. <https://doi.org/10.5194/gmd-10-3715-2017>
+* **CO<sub>2</sub> of the runs:** Foster, G. L., Royer, D. L. and Lunt, D. J. (2017). Future climate forcing
+  potentially without precedent in the last 420 million years. *Nature Communications* 8, 14845.
+  <https://doi.org/10.1038/ncomms14845>
+
+**The local correction.** *HadCM3L + local correction* is PaleoMapR's own statistical adjustment of the model
+fields to your corrected geography, learned from the same model run; it is not HadCM3L output. It captures
+continentality, moisture from new seaways, rain shadows and slower wind over new land, but not changes of the
+large-scale circulation. Say which climate option you used in your figure captions; the dashed outline on the
+maps marks where the climate is least reliable.

@@ -1,0 +1,25 @@
+# When a release is published, zips the Windows launcher (launcher/ folder) and attaches it to the release as
+# PaleoMapR-launcher.zip, so the README link .../releases/latest/download/PaleoMapR-launcher.zip always works
+on:
+  release:
+    types: [published]
+
+name: release-launcher
+
+permissions:
+  contents: write
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Zip the Windows launcher
+        run: |
+          mkdir PaleoMapR
+          cp launcher/* PaleoMapR/
+          zip -r PaleoMapR-launcher.zip PaleoMapR
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" PaleoMapR-launcher.zip --clobber

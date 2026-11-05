@@ -1,0 +1,40 @@
+url: https://stratigraphy.github.io/PaleoMapR/
+
+template:
+  bootstrap: 5
+  bslib:
+    primary: "#1f5f8b"
+
+home:
+  title: "PaleoMapR: fossil-corrected paleogeographic maps in R"
+  description: >
+    A point-and-click editor that checks PaleoDEMs against fossil and rock records, rebuilds fossil-corrected
+    elevation grids and draws publication maps with HadCM3L climate layers.
+
+navbar:
+  structure:
+    left: [intro, articles, reference, news]
+    right: [search, github]
+
+articles:
+  - title: User guide
+    navbar: ~
+    contents:
+      - articles/getting-started
+      - articles/data-sources
+
+reference:
+  - title: Start and set up the editor
+    contents:
+      - run_app
+      - pm_setup
+      - pm_folder
+  - title: Using the editor code in scripts
+    contents:
+      - pm_load
+  - title: Updates
+    contents:
+      - pm_update_status
+  - title: Package
+    contents:
+      - PaleoMapR-package
