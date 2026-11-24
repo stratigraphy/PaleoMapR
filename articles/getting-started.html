@@ -24,7 +24,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">PaleoMapR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.1</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -63,7 +63,7 @@
       <img src="../logo.png" class="logo" alt=""><h1>User guide: from setup to your first figure</h1>
             
       
-      <small class="dont-index">Source: <a href="https://github.com/stratigraphy/PaleoMapR/blob/v0.1.0/vignettes/articles/getting-started.Rmd" class="external-link"><code>vignettes/articles/getting-started.Rmd</code></a></small>
+      <small class="dont-index">Source: <a href="https://github.com/stratigraphy/PaleoMapR/blob/main/vignettes/articles/getting-started.Rmd" class="external-link"><code>vignettes/articles/getting-started.Rmd</code></a></small>
       <div class="d-none name"><code>getting-started.Rmd</code></div>
     </div>
 
@@ -352,7 +352,9 @@ first)</td>
 move with it at other ages. The <strong>Your points</strong> table lists
 them; select rows and press <strong>Delete selected points</strong>, or
 use the click action <strong>Delete nearest of YOUR points</strong>.
-<strong>Undo last change</strong> reverts the last addition or edit.</p>
+<strong>Undo last change</strong> puts your points and edits back as
+they were before the last change made in the editor (repeat it to go
+back further).</p>
 </div>
 <div class="section level3">
 <h3 id="switch-off-wrong-database-records">4.4 Switch off wrong database records<a class="anchor" aria-label="anchor" href="#switch-off-wrong-database-records"></a>
@@ -368,7 +370,7 @@ with Inspect first).</p>
 <h3 id="rebuild-the-corrected-grid">4.5 Rebuild the corrected grid<a class="anchor" aria-label="anchor" href="#rebuild-the-corrected-grid"></a>
 </h3>
 <p>Your points and edits only change the map after a rebuild. Press
-<strong>Rebuild this age</strong> (7): it takes about a minute, and the
+<strong>Rebuild this age</strong> (7): it takes 1 to 3 minutes, and the
 status line reports the records used, the seaways added, the seas still
 isolated (should be 0) and the ocean area. <strong>Rebuild the Silurian
 ages</strong> rebuilds 445–415 Ma at once on several cores. The
@@ -569,7 +571,8 @@ files are kept afterwards.</td>
 <tr class="even">
 <td>The editor does not open in the browser</td>
 <td>From R, look in the console for the address (<a href="http://127.0.0.1" class="external-link uri">http://127.0.0.1</a>:…) and open it
-by hand. With the launcher, see <code>state/setup_log.txt</code>.</td>
+by hand. With the launcher, see <code>state/setup_log.txt</code> and
+<code>state/app_log.txt</code>.</td>
 </tr>
 <tr class="odd">
 <td>Python / pyGPlates errors at the start</td>

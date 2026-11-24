@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">PaleoMapR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.1</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -33,9 +33,74 @@
 <div class="row">
   <main id="main" class="col-md-9"><div class="page-header">
       <img src="../logo.png" class="logo" alt=""><h1>Changelog</h1>
-      <small>Source: <a href="https://github.com/stratigraphy/PaleoMapR/blob/v0.1.0/NEWS.md" class="external-link"><code>NEWS.md</code></a></small>
+      <small>Source: <a href="https://github.com/stratigraphy/PaleoMapR/blob/main/NEWS.md" class="external-link"><code>NEWS.md</code></a></small>
     </div>
 
+    <div class="section level2">
+<h2 class="pkg-version" data-toc-text="0.1.1" id="paleomapr-011">PaleoMapR 0.1.1<a class="anchor" aria-label="anchor" href="#paleomapr-011"></a></h2>
+<p>Bug fixes and speed-ups after a full review of the editor.</p>
+<div class="section level3">
+<h3 id="editor-app-0-1-1">Editor (app)<a class="anchor" aria-label="anchor" href="#editor-app-0-1-1"></a></h3>
+<ul><li>An error in a button or click (for example a CSV file in <code>points/</code> that is open in Excel) is now shown in the status line; before, it ended the session and, with the launcher, stopped R without a message.</li>
+<li>Undo restores <code>user_points.csv</code> and <code>record_edits.csv</code> exactly as they were before the last change made in the editor (up to 50 steps). Before, it removed the last row of a table, which could delete the wrong point.</li>
+<li>“Delete selected points” and “Remove selected edits” remove the rows you selected by their content, also when the files changed meanwhile.</li>
+<li>After a drag or zoom, clicks and wheel steps are ignored until the new map is shown; a quick click could land in the wrong place. A sideways trackpad swipe no longer zooms in.</li>
+<li>The Figure map is updated after adding points, edits or rebuilding a grid.</li>
+<li>Ticking symbols, north arrow or scale bar no longer recomputes the whole Figure map.</li>
+<li>A locality with a latitude outside -90 to 90 is refused (it used to break the editor map).</li>
+<li>A point whose age range does not include the map age gets a warning when it is added.</li>
+<li>The download buttons appear once a figure has been rendered.</li>
+<li>A zoomed-in or composite figure of an area wider than 180 degrees of longitude is refused with a message.</li>
+<li>Rebuilding reports ages that failed instead of stopping; the other ages are kept.</li>
+</ul></div>
+<div class="section level3">
+<h3 id="maps-0-1-1">Maps<a class="anchor" aria-label="anchor" href="#maps-0-1-1"></a></h3>
+<ul><li>Winkel tripel maps work (they always failed) and use the proper standard parallel (50.467 degrees).</li>
+<li>Relief shading is lit from the north-west, as intended (it was lit from the south-west).</li>
+<li>“Four seasons on one page” works (it stopped with “could not find function .season_climates”).</li>
+<li>Globe and polar overviews of a composite turn towards the zoomed-in area, so its box is visible.</li>
+<li>Symbols and points on the far side of a globe or outside a polar map are no longer drawn.</li>
+<li>Zoomed-in maps of open sea (no land) no longer fail; small windows keep their graticule labels.</li>
+<li>Graphics devices are always closed, also after an error; a PDF or PNG that is open in a viewer gives a clear message. Without cairo, the standard PNG and PDF devices are used.</li>
+<li>Locality names with / : * ? and similar characters work as map centre (file names are made safe).</li>
+<li>Single-age renders get their own PDF name (rendering 430 Ma no longer overwrites the 425 Ma PDF); polar maps with a different edge latitude and zoom windows less than 1 degree apart get different file names.</li>
+<li>Rendering is about twice as fast: each page’s image is computed once for the PNG and re-used for the PDF.</li>
+<li>The Figure preview’s scale bar refers to the map centre.</li>
+</ul></div>
+<div class="section level3">
+<h3 id="climate-layers-0-1-1">Climate layers<a class="anchor" aria-label="anchor" href="#climate-layers-0-1-1"></a></h3>
+<ul><li>Climate files are stored per run and model age (<code>data/climate/&lt;run&gt;_&lt;age&gt;Ma/</code>). Run IDs that differ only in upper / lower case (e.g. teXPh 425 Ma and teXph 297 Ma) shared one folder on Windows and macOS, so another age’s climate could be shown. Existing files in the old <code>data/climate/&lt;run&gt;/</code> folders are not used; the new folders are filled when needed (about 30 MB per age).</li>
+<li>Downloaded files are checked before they are kept; an interrupted download or a proxy error page is no longer used as data.</li>
+<li>Local correction: runoff on new land no longer counts the precipitation change twice.</li>
+<li>Temperature: both climate options use the model’s own terrain as reference and your lapse rate; lapse rate 0 now switches the correction off completely, and the two options agree where the map is unchanged.</li>
+<li>“Why the sea is fresher / saltier” uses the class of the nearest model cell (no blended, invented classes).</li>
+<li>No blank strips along the coasts in the river, freshwater, salinity-source and runoff (“as run”) layers.</li>
+<li>Mixed-layer depth and sea ice extend into new seaways from the nearby sea (they were 0 there).</li>
+<li>With “Original PaleoDEM”, sea ice is linked to the land ice of that map, not of the corrected one.</li>
+</ul></div>
+<div class="section level3">
+<h3 id="corrected-grids-0-1-1">Corrected grids<a class="anchor" aria-label="anchor" href="#corrected-grids-0-1-1"></a></h3>
+<ul><li>Seaway widths and banks are measured with true distances on the sphere. The old east-west distance depended on the grid column, so north-south seaways far from 180 degrees came out too wide. Rebuild your ages to apply this.</li>
+<li>The flooded patch around a marine record is round also at high latitude (it was cut off east-west above ~45 deg).</li>
+<li>Records on crust that the plate model adds only after the map age (e.g. later accreted terranes) are left out; their number is reported.</li>
+<li>PBDB and Macrostrat records of the whole 400-450 Ma window are downloaded (the start-up Silurian file missed the latest Ordovician and Early Devonian, e.g. 415 Ma had no PBDB records).</li>
+<li>Points tables written by Excel are read correctly: byte-order mark, semicolons and decimal commas, TRUE/FALSE in other languages (WAAR, VRAI, …), swapped ages, repeated IDs. A table that lacks its columns is never written back.</li>
+<li>User points with impossible coordinates are skipped with a warning instead of stopping every rebuild.</li>
+<li>
+<code>records_base.csv</code> is rebuilt when the classification settings in <code>config.R</code> change.</li>
+<li>Rebuilding no longer resets R’s random numbers, and a failing age no longer discards the others’ statistics; <code>step6_records_used.csv</code> and <code>step6_seaways.csv</code> keep the other ages.</li>
+<li>Downloads that failed are not retried for 10 minutes, so an offline computer does not wait at every rebuild.</li>
+</ul></div>
+<div class="section level3">
+<h3 id="launcher-and-setup-0-1-1">Launcher and setup<a class="anchor" aria-label="anchor" href="#launcher-and-setup-0-1-1"></a></h3>
+<ul><li>The launcher works in folders with accents or apostrophes in their path (UTF-16 VBS, UTF-8 PowerShell script with byte-order mark, quoted paths), and the “already running” check works in every Windows language.</li>
+<li>After an R upgrade, the desktop icon says that SETUP.bat has to be run again instead of failing silently.</li>
+<li>The editor started by the icon writes its messages to <code>state/app_log.txt</code>.</li>
+<li>SETUP.bat reports arguments it does not understand.</li>
+<li>The update check reads today’s result directly instead of starting an R process at every page load.</li>
+<li>The editor scripts are no longer loaded twice at start.</li>
+</ul></div>
+</div>
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.1.0" id="paleomapr-010-alpha">PaleoMapR 0.1.0 (alpha)<a class="anchor" aria-label="anchor" href="#paleomapr-010-alpha"></a></h2>
 <p>First public release, for testing and feedback. Buttons, defaults and file names may still change.</p>
@@ -47,7 +112,8 @@
 <li>About tab with the version, the works to cite, a daily update check with “Update and restart”, and a button that closes the editor.</li>
 <li>The table of database records is rebuilt when its classification rules change (checksum), not after every update of the package.</li>
 </ul></div>
-  </main></div>
+  </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
+    </nav></aside></div>
 
 
     <footer><div class="pkgdown-footer-left">
