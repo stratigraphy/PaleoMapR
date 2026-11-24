@@ -65,7 +65,7 @@ speedy_exe <- function(cfg = SILUCARB) {
 
 #' the 12 monthly HadCM3L atmosphere files of the run for this age (downloaded once, ~16 MB)
 climate_month_files <- function(age, cfg = SILUCARB) {
-  e <- climate_exp(age); d <- file.path(cfg$dir_data, "climate", e$id)
+  e <- climate_exp(age); d <- .climate_dir(e, cfg)
   f <- file.path(d, sprintf("%sa.pdcl%s.nc", e$id, .MONTHS))
   for (k in seq_along(f)) .fetch_retry(sprintf(CLIMATE_URL, e$id, basename(f[k])), f[k])
   if (!all(file.exists(f))) stop("monthly climate files for ", age, " Ma could not be downloaded", call. = FALSE)

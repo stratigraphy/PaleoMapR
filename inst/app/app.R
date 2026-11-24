@@ -8,16 +8,15 @@
 # - Hold and drag to move the map; mouse wheel or the +/- buttons to zoom.
 # - Everything is written to points/user_points.csv and points/record_edits.csv, so you can also edit those
 #   files by hand.
-# - 'Rebuild this age' re-runs the DEM correction (about 1 minute per age); 'Render map' draws the map (PNG +
+# - 'Rebuild this age' re-runs the DEM correction (1-3 minutes per age); 'Render map' draws the map (PNG +
 #   PDF) for this age.
+# - An error in a button or click is shown in the status line instead of ending the session (observeEvent below).
 library(shiny)
 library(DT)
 PROJECT_DIR <- normalizePath(getOption("PaleoMapR.folder", getwd()), winslash = "/", mustWork = FALSE)
 PaleoMapR::pm_load(PROJECT_DIR, envir = environment())
-# shiny restores the working directory when the app stops
-setwd(PROJECT_DIR)
 init_user_tables()
-invisible(read_localities())
+invisible(tryCatch(read_localities(), error = function(e) { message("localities.csv: ", conditionMessage(e)) }))
 # first start without pm_setup(): fetch the data here (finished downloads are kept)
 if (!dir.exists(file.path(SILUCARB$dir_coast, "CS"))) download_data()
 download_dems()                                   # ~280 MB zip, once
@@ -42,13 +41,42 @@ MODES <- c("Add marine point (shallow shelf)" = "add_marine",
            "Delete nearest of YOUR points (permanent)" = "delete_point")
 
 
+# observeEvent that shows an error in the status line (and the R console) instead of ending the session: an
+# uncaught error in an observer stops the whole app, e.g. when a CSV in points/ is open in Excel
+observeEvent <- function(eventExpr, handlerExpr, ..., ignoreNULL = TRUE, ignoreInit = FALSE) {
+  ev <- substitute(eventExpr)
+  hx <- substitute(handlerExpr)
+  env <- parent.frame()
+  safe <- bquote(tryCatch(.(hx), error = function(e) {
+    if (!inherits(e, "shiny.silent.error")) {
+      message("PaleoMapR: ", conditionMessage(e))
+      .pm_show_error(e)
+    }
+  }))
+  shiny::observeEvent(ev, safe, event.env = env, event.quoted = TRUE, handler.env = env, handler.quoted = TRUE,
+      ignoreNULL = ignoreNULL, ignoreInit = ignoreInit, ...)
+}
+
 MAP_JS <- "
-// drag to pan, mouse wheel to zoom, click: for the editor map (inputs map_*) and the Figure map (fig_map_*)
+// drag to pan, mouse wheel to zoom, click: for the editor map (inputs map_*) and the Figure map (fig_map_*).
+// After a pan or zoom the old image stays on screen until the new one arrives; clicks, drags and wheel steps are
+// ignored meanwhile, because the server already uses the new view to convert positions.
 function bindNav(id) {
   var el = document.getElementById(id); if (!el) return;
-  var down = null, moved = false;
+  var down = null, moved = false, busy = false, busyTimer = null;
+  function setBusy() {
+    busy = true; el.style.opacity = '0.75';
+    clearTimeout(busyTimer); busyTimer = setTimeout(clearBusy, 8000);
+  }
+  function clearBusy() {
+    busy = false; el.style.opacity = '';
+    var img = el.querySelector('img'); if (img) img.style.transform = '';
+  }
+  $(document).on('shiny:value shiny:error', function(e) {
+    if (e.name === id) setTimeout(clearBusy, 30);
+  });
   el.addEventListener('mousedown', function(e) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || busy) return;
     var img = el.querySelector('img'); if (!img) return;
     down = {x: e.clientX, y: e.clientY, img: img, r: img.getBoundingClientRect()}; moved = false;
     e.preventDefault();
@@ -62,7 +90,7 @@ function bindNav(id) {
   window.addEventListener('mouseup', function(e) {
     if (!down) return;
     var r = down.r, dx = e.clientX - down.x, dy = e.clientY - down.y;
-    if (moved) Shiny.setInputValue(id + '_pan', {dx: dx / r.width, dy: dy / r.height, n: Math.random()});
+    if (moved) { setBusy(); Shiny.setInputValue(id + '_pan', {dx: dx / r.width, dy: dy / r.height, n: Math.random()}); }
     else Shiny.setInputValue(id + '_click2', {fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height, n: Math.random()});
     down = null; el.style.cursor = '';
   });
@@ -70,11 +98,15 @@ function bindNav(id) {
   el.addEventListener('wheel', function(e) {
     var img = el.querySelector('img'); if (!img) return;
     e.preventDefault();
+    if (busy) return;
     var r = img.getBoundingClientRect();
     acc += e.deltaY; last = {fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height};
     clearTimeout(timer);
     timer = setTimeout(function() {
-      Shiny.setInputValue(id + '_wheel', {steps: acc > 0 ? -1 : 1, fx: last.fx, fy: last.fy, n: Math.random()});
+      if (acc !== 0) {          // a sideways swipe (deltaY 0) does not zoom
+        setBusy();
+        Shiny.setInputValue(id + '_wheel', {steps: acc > 0 ? -1 : 1, fx: last.fx, fy: last.fy, n: Math.random()});
+      }
       acc = 0;
     }, 180);
   }, {passive: false});
@@ -276,7 +308,7 @@ ui <- navbarPage(paste("PaleoMapR", APP_VERSION), id = "main", collapsible = TRU
       plotOutput("fig_map", height = "560px"),
       div(style = "color:#555; margin:3px 0 8px 0", textOutput("fig_win_txt", inline = TRUE)),
       verbatimTextOutput("fig_msg"),
-      div(downloadButton("fig_pdf", "Download PDF"), downloadButton("fig_png", "Download PNG")),
+      uiOutput("fig_downloads"),
       br(),
       div(id = "fig_preview", imageOutput("fig_img", height = "auto"))
     )
@@ -287,9 +319,52 @@ ui <- navbarPage(paste("PaleoMapR", APP_VERSION), id = "main", collapsible = TRU
 server <- function(input, output, session) {
   PaleoMapR:::pm_server_extras(input, session)
   rv <- reactiveValues(version = 0, zoom = NULL, last = NULL, msg = "Ready.", gridv = 0, locv = 0, panv = 0)
+  .pm_show_error <- function(e) {
+    rv$msg <- paste("Error:", conditionMessage(e))
+    fig$msg <- rv$msg
+  }
+
+  # ---- undo: a copy of user_points.csv and record_edits.csv before every change made here ----
+  undo_stack <- list()
+  .file_copy <- function(f) {
+    if (file.exists(f)) { readBin(f, "raw", file.info(f)$size) } else { NULL }
+  }
+  snapshot <- function() {
+    fu <- points_file("user_points.csv")
+    fe <- points_file("record_edits.csv")
+    undo_stack[[length(undo_stack) + 1]] <<- list(fu = fu, u = .file_copy(fu), fe = fe, e = .file_copy(fe))
+    if (length(undo_stack) > 50) {
+      undo_stack <<- undo_stack[-1]
+    }
+  }
+  restore_last <- function() {
+    if (!length(undo_stack)) {
+      return(FALSE)
+    }
+    s_ <- undo_stack[[length(undo_stack)]]
+    for (k in list(list(f = s_$fu, b = s_$u), list(f = s_$fe, b = s_$e))) {
+      if (!is.null(k$b)) {
+        ok <- tryCatch({
+          writeBin(k$b, k$f)
+          TRUE
+        }, error = function(e) { FALSE }, warning = function(w) { FALSE })
+        if (!ok) {
+          stop("Could not undo: ", basename(k$f), " is open in another program (e.g. Excel). Close it and try again.", call. = FALSE)
+        }
+      }
+    }
+    undo_stack <<- undo_stack[-length(undo_stack)]
+    TRUE
+  }
 
   # ---- localities -------------------------------------------------------------
-  locs <- reactive({ rv$locv; read_localities() })
+  locs <- reactive({
+    rv$locv
+    tryCatch(read_localities(), error = function(e) {
+      isolate(rv$msg <- paste("localities.csv:", conditionMessage(e)))
+      data.frame(name = character(0), lat = numeric(0), lon = numeric(0), show = logical(0))
+    })
+  })
   observe({
     l <- locs()
     updateSelectizeInput(session, "localities", choices = l$name, selected = l$name[l$show])
@@ -303,11 +378,22 @@ server <- function(input, output, session) {
   }, ignoreNULL = FALSE, ignoreInit = TRUE)
   output$loctab <- renderDT(datatable(locs(), rownames = FALSE, options = list(pageLength = 8, dom = "tip")))
   observeEvent(input$loc_add, {
-    req(nzchar(input$loc_name), is.finite(input$loc_lat), is.finite(input$loc_lon))
-    e <- locality_write_msg(add_locality(input$loc_name, input$loc_lat, input$loc_lon))
+    nm <- trimws(input$loc_name %||% "")
+    la <- input$loc_lat
+    lo <- input$loc_lon
+    if (!nzchar(nm)) {
+      rv$msg <- "Give the locality a name."
+      return()
+    }
+    if (!isTRUE(is.finite(la) && is.finite(lo) && abs(la) <= 90)) {
+      rv$msg <- "Give a present-day latitude (-90 to 90) and longitude."
+      return()
+    }
+    lo <- ((lo + 180) %% 360) - 180
+    e <- locality_write_msg(add_locality(nm, la, lo))
     if (!is.null(e)) { rv$msg <- e; return() }
     rv$locv <- rv$locv + 1
-    rv$msg <- paste("Locality added:", input$loc_name)
+    rv$msg <- paste("Locality added:", nm)
   })
   observeEvent(input$fig_loc_add, {                # add a locality from the Figure tab
     say <- function(m) { rv$msg <- m; fig$msg <- m }
@@ -429,7 +515,6 @@ server <- function(input, output, session) {
     if ("equator" %in% input$map_show) abline(h = 0, col = "#ffd54a", lwd = 1.3, lty = 2)
     if ("coastlines" %in% input$show) draw_modern(modern("coast"), "#ffffff", 0.9)
     if ("borders" %in% input$show) draw_modern(modern("borders"), "#000000", 0.8)
-    if (!nrow(d)) return()
     act <- d[d$active, ]; exc <- d[!d$active, ]
     for (k in seq_len(nrow(SETTING_STYLE))) {
       s <- SETTING_STYLE[k, ]
@@ -453,7 +538,8 @@ server <- function(input, output, session) {
       lkey <- paste(input$age, input$model, paste(l$name, l$lat, l$lon, collapse = ";"))
       pl <- loc_cache[[lkey]]
       if (is.null(pl)) {                            # rotate the localities once per map (pyGPlates), not at every redraw
-        pl <- gp_reconstruct(l$lat, l$lon, rep(as.numeric(input$age), nrow(l)), input$model)
+        pl <- tryCatch(gp_reconstruct(l$lat, l$lon, rep(as.numeric(input$age), nrow(l)), input$model),
+                       error = function(e) { data.frame(plat = rep(NA_real_, nrow(l)), plon = rep(NA_real_, nrow(l))) })
         assign(lkey, pl, envir = loc_cache)
       }
       points(pl$plon, pl$plat, pch = 21, bg = "#e34948", col = "white", cex = 1.4, lwd = 1.5)
@@ -568,17 +654,27 @@ server <- function(input, output, session) {
       setting <- switch(kind, marine = "marine", marine_deep = "marine_deep", evaporite = "evaporite",
                         terrestrial = "terrestrial", reef = "marine", glacial = "")
       indicator <- switch(kind, reef = "reef", glacial = "glacial", evaporite = "evaporite", "")
-      ay <- min(input$age_young, input$age_old); ao <- max(input$age_young, input$age_old)
+      ay <- suppressWarnings(min(input$age_young, input$age_old, na.rm = TRUE))
+      ao <- suppressWarnings(max(input$age_young, input$age_old, na.rm = TRUE))
+      if (!is.finite(ay) || !is.finite(ao)) {
+        ay <- age
+        ao <- age
+      }
+      snapshot()
       id <- add_user_point(lat = y, lon = x, setting = setting, indicator = indicator, coords = "palaeo",
                            model = input$model, clicked_age = age, age_young = ay, age_old = ao, note = input$note)
-      bump(sprintf("Added %s point %s at %.2f, %.2f (palaeo, %s Ma). Rebuild this age to update the grid.",
-                   kind, id, y, x, age))
+      w_ <- SILUCARB$age_window
+      outside <- age < ay - w_ || age > ao + w_
+      bump(sprintf("Added %s point %s at %.2f, %.2f (palaeo, %s Ma). %s", kind, id, y, x, age,
+                   if (outside) sprintf("Note: its age range %g\u2013%g Ma does not include this map age, so it is not used or shown here.", ay, ao)
+                   else "Rebuild this age to update the grid."))
     } else {
       near <- nearest(x, y, shown())
       if (is.null(near)) { rv$msg <- "No record near the click (zoom in for precise picking)."; return() }
       r <- near[1, ]
       if (m == "toggle") {
         act <- if (r$active) "exclude" else "include"
+        snapshot()
         edit_record(r$record_id, act, note = input$note)
         bump(sprintf("%sd %s (%s, %s). Rebuild this age to update the grid.", tools::toTitleCase(act),
                      r$record_id, r$setting, r$name))
@@ -598,51 +694,65 @@ server <- function(input, output, session) {
   })
 
   # ---- tables of your changes -----------------------------------------------
-  output$upoints <- renderDT({ rv$version; datatable(read_user_points(), rownames = FALSE,
-                                                     options = list(pageLength = 8, scrollX = TRUE)) })
-  output$uedits <- renderDT({ rv$version; datatable(read_record_edits(), rownames = FALSE,
-                                                    options = list(pageLength = 8, scrollX = TRUE)) })
+  # the tables as shown: rows are deleted by their content, not by position (the files may change meanwhile)
+  upoints_shown <- reactive({ rv$version; read_user_points() })
+  uedits_shown <- reactive({ rv$version; read_record_edits() })
+  output$upoints <- renderDT({ datatable(upoints_shown(), rownames = FALSE, options = list(pageLength = 8, scrollX = TRUE)) })
+  output$uedits <- renderDT({ datatable(uedits_shown(), rownames = FALSE, options = list(pageLength = 8, scrollX = TRUE)) })
   observeEvent(input$confirm_delete, {
     removeModal(); req(rv$to_delete)
+    snapshot()
     delete_user_point(rv$to_delete); bump(paste("Deleted", rv$to_delete, "permanently. Rebuild this age to update the grid."))
     rv$to_delete <- NULL
   })
   observeEvent(input$del_points, {
     s <- input$upoints_rows_selected; req(length(s) > 0)
-    u <- read_user_points(); write.csv(u[-s, ], points_file("user_points.csv"), row.names = FALSE)
-    bump(sprintf("Deleted %d point(s).", length(s)))
+    ids <- upoints_shown()$point_id[s]
+    snapshot()
+    n <- delete_user_point(ids)
+    bump(sprintf("Deleted %d point(s): %s. Undo brings them back.", n, paste(ids, collapse = ", ")))
   })
   observeEvent(input$del_edits, {
     s <- input$uedits_rows_selected; req(length(s) > 0)
-    e <- read_record_edits(); write.csv(e[-s, ], points_file("record_edits.csv"), row.names = FALSE)
+    key <- function(d) { paste(d$record_id, d$action, d$value, d$note, sep = "\r") }
+    drop <- key(uedits_shown()[s, , drop = FALSE])
+    e <- read_record_edits()
+    snapshot()
+    .write_points_csv(e[!key(e) %in% drop, , drop = FALSE], points_file("record_edits.csv"))
     bump(sprintf("Removed %d edit(s).", length(s)))
   })
   observeEvent(input$undo, {
-    # undo = remove the most recent row of whichever table changed last
-    fu <- points_file("user_points.csv"); fe <- points_file("record_edits.csv")
-    tu <- file.mtime(fu); te <- file.mtime(fe)
-    if (!is.na(te) && (is.na(tu) || te >= tu) && nrow(read_record_edits())) {
-      e <- read_record_edits(); write.csv(e[-nrow(e), ], fe, row.names = FALSE); bump("Undid the last edit.")
-    } else if (nrow(read_user_points())) {
-      u <- read_user_points(); write.csv(u[-nrow(u), ], fu, row.names = FALSE); bump("Removed the last point.")
+    # undo = put user_points.csv and record_edits.csv back as they were before the last change made here
+    if (restore_last()) {
+      bump(sprintf("Undone. Rebuild this age to update the grid.%s",
+                   if (length(undo_stack)) sprintf(" (%d more step(s) can be undone)", length(undo_stack)) else ""))
+    } else {
+      rv$msg <- "Nothing to undo (changes made in this session can be undone)."
     }
   })
 
   # ---- rebuild / render -----------------------------------------------------
   observeEvent(input$rebuild, {
     age <- as.numeric(input$age)
-    withProgress(message = sprintf("Rebuilding %d Ma (about 1 minute)...", age), value = 0.3, {
+    withProgress(message = sprintf("Rebuilding %d Ma (1-3 minutes)...", age), value = 0.3, {
       st <- run_dem_correction(age, cfg = apply_user_settings(SILUCARB), workers = 1)
     })
     rv$gridv <- rv$gridv + 1
     s <- st[st$map_age == age, ]
+    if (!nrow(s)) {
+      rv$msg <- paste("The grid could not be rebuilt:", paste(attr(st, "failed"), collapse = "; "))
+      return()
+    }
     rv$msg <- sprintf("%d Ma rebuilt: %d marine / %d evaporite / %d terrestrial records, %d seaways, %d isolated, ocean %.1f Mkm2 (raw %.1f).",
                       age, s$n_marine, s$n_evaporite, s$n_terrestrial, s$seaways_added,
                       s$marine_water_bodies_still_isolated, s$ocean_corrected_Mkm2, s$ocean_DEM_Mkm2)
   })
   observeEvent(input$rebuild_all, {
-    withProgress(message = "Rebuilding all ages (parallel)...", value = 0.3, { run_dem_correction(cfg = apply_user_settings(SILUCARB)) })
-    rv$gridv <- rv$gridv + 1; rv$msg <- "All ages rebuilt."
+    st <- NULL
+    withProgress(message = "Rebuilding the Silurian ages (parallel)...", value = 0.3, { st <- run_dem_correction(cfg = apply_user_settings(SILUCARB)) })
+    rv$gridv <- rv$gridv + 1
+    fl <- attr(st, "failed")
+    rv$msg <- if (length(fl)) paste("Rebuilt, except:", paste(fl, collapse = "; ")) else "All Silurian ages rebuilt."
   })
   observeEvent(input$fig_kind, {                    # layout -> the zoom-in and overview settings
     updateCheckboxInput(session, "render_zoom", value = input$fig_kind != "whole")
@@ -656,9 +766,16 @@ server <- function(input, output, session) {
   figv <- reactiveValues(cx = NULL, cy = 0, w = 360, h = 180, v = 0)
   fgeo <- new.env(); fdrawn <- reactiveVal(0)
   fig_ctr <- reactive(if (input$center == "") NULL else if (input$center == "lon") input$center_lon else input$center)
+  # only these overlays change the prepared Figure map; ticking a symbol or the north arrow does not redo it
+  setup_show <- reactiveVal(character(0))
+  observe({
+    v <- sort(intersect(input$map_show, c("sea_ice", "rivers", "wind", "currents", "climate_flag", "shoreline")))
+    if (!identical(v, isolate(setup_show()))) setup_show(v)
+  })
   fig_setup <- reactive({
+    rv$version; rv$gridv                            # new points, edits or a rebuilt grid change the Figure map too
     src <- fig_source(function(t) fig$msg <- t); req(src)
-    ms <- input$map_show; run <- src$run
+    ms <- setup_show(); run <- src$run
     withProgress(message = "Preparing the Figure map ...", value = 0.4,
       tryCatch(figure_preview_setup(src$age, model = if (is.null(run)) input$model else "scotese_and_wright2018",
                                     corrected = src$corr, layer = input$fig_layer %||% "topography", season = input$season %||% "ann",
@@ -762,6 +879,10 @@ server <- function(input, output, session) {
       if (input$zoom_size %in% c("fig", "box")) {
         reg <- fig_region()
         if (is.null(reg)) { say("Zoom in on the Figure map first (mouse wheel or +) to choose the area, or choose another 'Area to render'."); return() }
+        if (diff(fig_visible()$lon) > 180) {
+          say("The area shown is wider than 180\u00b0 of longitude, too wide for a zoomed-in map: zoom in further, or choose 'Whole map'.")
+          return()
+        }
       } else if (identical(input$zoom_size, "custom")) {
         w <- input$zoom_w_km; h <- input$zoom_h_km
         if (!isTRUE(is.finite(w) && is.finite(h) && w > 0 && h > 0)) { say("Give a width and height in km."); return() }
@@ -832,10 +953,14 @@ server <- function(input, output, session) {
     fig$v; req(fig$png, file.exists(fig$png))
     list(src = fig$png, contentType = "image/png", width = "100%", alt = "rendered map")
   }, deleteFile = FALSE)
+  output$fig_downloads <- renderUI({
+    req(fig$pdf)
+    div(downloadButton("fig_pdf", "Download PDF"), downloadButton("fig_png", "Download PNG"))
+  })
   output$fig_pdf <- downloadHandler(filename = function() basename(fig$pdf %||% "map.pdf"),
-                                    content = function(file) file.copy(fig$pdf, file))
+                                    content = function(file) { req(fig$pdf); file.copy(fig$pdf, file) })
   output$fig_png <- downloadHandler(filename = function() basename(fig$png %||% "map.png"),
-                                    content = function(file) file.copy(fig$png, file))
+                                    content = function(file) { req(fig$png); file.copy(fig$png, file) })
   output$stats <- renderTable({
     rv$gridv; f <- file.path(SILUCARB$dir_results, "step6_corrected_dem_stats.csv")
     if (!file.exists(f)) return(NULL)

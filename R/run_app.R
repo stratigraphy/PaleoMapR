@@ -21,8 +21,12 @@
 run_app <- function(folder = pm_folder(), port = NULL, launch.browser = TRUE, stop_on_close = FALSE) {
   dir.create(folder, recursive = TRUE, showWarnings = FALSE)
   folder <- normalizePath(folder, winslash = "/", mustWork = TRUE)
-  oldop <- options(PaleoMapR.folder = folder, PaleoMapR.stop_on_close = isTRUE(stop_on_close))
+  # shiny.autoload.r = FALSE: the editor scripts in R/ next to app.R are loaded by app.R itself (pm_load), not a
+  # second time by shiny
+  oldop <- options(PaleoMapR.folder = folder, PaleoMapR.stop_on_close = isTRUE(stop_on_close), shiny.autoload.r = FALSE)
   on.exit(options(oldop), add = TRUE)
+  oldwd <- getwd()
+  on.exit(setwd(oldwd), add = TRUE)
   message("PaleoMapR ", as.character(utils::packageVersion("PaleoMapR")), ", working folder ", folder)
   args <- list(appDir = pm_code_dir(), launch.browser = launch.browser)
   if (!is.null(port)) {

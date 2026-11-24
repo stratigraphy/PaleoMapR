@@ -112,7 +112,7 @@ SILUCARB <- list(
              golonka = "Golonka (EarthByte)"),
 
   # ---- parallel processing (DEM correction, one age per worker) ----
-  workers = max(1, min(7, parallel::detectCores() - 1)),
+  workers = max(1, min(7, parallel::detectCores() - 1, na.rm = TRUE)),
   keep_awake = TRUE                # keep Windows awake while climate runs go on in the background
 )
 

@@ -68,7 +68,8 @@ pm_about_tab <- function() {
               "Something wrong or missing? ", a(L$issues, "Report it"), " or ", a(L$discussions, "ask in Discussions"), "."),
           shiny::div(style = "margin:12px 0",
               shiny::actionButton("pm_check_update", "Check for updates", icon = shiny::icon("rotate")),
-              shiny::actionButton("pm_quit", "Close the editor (stops R)", icon = shiny::icon("power-off"))),
+              shiny::actionButton("pm_quit", if (isTRUE(getOption("PaleoMapR.stop_on_close"))) { "Close the editor (stops R)" } else { "Close the editor" },
+                  icon = shiny::icon("power-off"))),
           shiny::h4("How to cite"),
           shiny::p("Please cite PaleoMapR (see ", shiny::tags$code("citation(\"PaleoMapR\")"),
               ") and the data behind your maps:"),
@@ -103,7 +104,16 @@ pm_server_extras <- function(input, session) {
     upd$job <- if (inherits(job, "try-error")) { NULL } else { job }
   }
   if (isTRUE(getOption("PaleoMapR.check_updates", TRUE))) {
-    start_check()
+    # the result of today's check is read here; only a stale or missing one starts a background R process
+    cached <- pm_cached_status()
+    if (is.null(cached)) {
+      start_check()
+    } else {
+      shiny::isolate(upd$status <- cached)
+      shiny::observe({
+        pm_update_note(cached, FALSE)
+      })
+    }
   }
   shiny::observe({
     j <- upd$job
@@ -147,10 +157,24 @@ pm_server_extras <- function(input, session) {
   })
   shiny::observeEvent(input$pm_quit, {
     session$sendCustomMessage("pm_closed", list(title = "The editor is closed",
-        text = "R has stopped. Your points, edits and maps are saved in the working folder. Start the editor again with its desktop icon or run_app()."))
+        text = paste(if (isTRUE(getOption("PaleoMapR.stop_on_close"))) { "R has stopped." } else { "R is free again." },
+            "Your points, edits and maps are saved in the working folder. Start the editor again with its desktop icon or run_app().")))
     shiny::stopApp()
   })
   invisible(NULL)
+}
+
+# today's update check from the cache, or NULL
+pm_cached_status <- function() {
+  cache <- file.path(tools::R_user_dir("PaleoMapR", "cache"), "update_check.rds")
+  if (!file.exists(cache)) {
+    return(NULL)
+  }
+  old <- tryCatch(readRDS(cache), error = function(e) { NULL })
+  if (is.null(old) || difftime(Sys.time(), old$time, units = "hours") >= 24) {
+    return(NULL)
+  }
+  old$status
 }
 
 pm_update_note <- function(st, force = FALSE) {

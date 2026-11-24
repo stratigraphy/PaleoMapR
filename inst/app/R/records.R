@@ -123,29 +123,123 @@ init_user_tables <- function(cfg = SILUCARB) {
   invisible(TRUE)
 }
 
+# Reads a points table as written by the editor, by hand or by Excel: UTF-8 with or without a byte-order mark,
+# comma- or semicolon-separated (Excel in many European languages, with decimal commas). All columns are read as
+# text. Stops (and so never lets the table be written back) when a required column is missing.
+.read_points_csv <- function(f, required) {
+  first <- readLines(f, n = 1, warn = FALSE, encoding = "UTF-8")
+  if (!length(first) || !nzchar(trimws(sub("^\ufeff", "", first)))) {
+    out <- as.data.frame(matrix(character(0), 0, length(required), dimnames = list(NULL, required)), stringsAsFactors = FALSE)
+    return(out)
+  }
+  bare <- gsub('"[^"]*"', "", first)
+  semi <- lengths(regmatches(bare, gregexpr(";", bare))) > lengths(regmatches(bare, gregexpr(",", bare)))
+  d <- if (semi) {
+    utils::read.csv2(f, fileEncoding = "UTF-8-BOM", stringsAsFactors = FALSE, colClasses = "character", na.strings = c("NA", ""))
+  } else {
+    utils::read.csv(f, fileEncoding = "UTF-8-BOM", stringsAsFactors = FALSE, colClasses = "character", na.strings = c("NA", ""))
+  }
+  names(d) <- trimws(sub("^\ufeff|^X\\.U\\.FEFF\\.", "", names(d)))
+  miss <- setdiff(required, names(d))
+  if (length(miss)) {
+    stop(basename(f), ": column(s) ", paste(miss, collapse = ", "), " not found. Check the file (it must have a header ",
+        "row; separators , or ;). Nothing was changed.", call. = FALSE)
+  }
+  attr(d, "decimal_comma") <- semi
+  d
+}
+# text -> number, accepting a decimal comma
+.as_num <- function(x) {
+  suppressWarnings(as.numeric(sub(",", ".", trimws(as.character(x)), fixed = TRUE)))
+}
+# text -> TRUE / FALSE in several languages (Excel writes WAAR, VRAI, WAHR ...); NA stays NA
+.as_flag <- function(x) {
+  v <- toupper(trimws(as.character(x)))
+  out <- rep(NA, length(v))
+  out[v %in% c("TRUE", "T", "1", "YES", "Y", "WAAR", "VRAI", "WAHR", "VERO", "VERDADERO", "SANT")] <- TRUE
+  out[v %in% c("FALSE", "F", "0", "NO", "N", "ONWAAR", "FAUX", "FALSCH", "FALSO", "FALSK")] <- FALSE
+  out
+}
+
 read_user_points <- function(cfg = SILUCARB) {
   f <- points_file("user_points.csv", cfg)
   if (!file.exists(f)) init_user_tables(cfg)
-  u <- read.csv(f, stringsAsFactors = FALSE, na.strings = c("NA", ""))
-  for (k in setdiff(USER_POINT_COLS, names(u))) u[[k]] <- NA
-  u$setting[is.na(u$setting)] <- ""; u$indicator[is.na(u$indicator)] <- ""
-  u$coords[is.na(u$coords)] <- "present"; u$model[is.na(u$model)] <- "scotese_and_wright2018"
-  u$active <- is.na(u$active) | as.logical(u$active)
+  u <- .read_points_csv(f, c("lat", "lon"))
+  for (k in setdiff(USER_POINT_COLS, names(u))) u[[k]] <- rep(NA, nrow(u))
+  for (k in c("lat", "lon", "clicked_age", "age_young", "age_old")) u[[k]] <- .as_num(u[[k]])
+  for (k in c("setting", "indicator", "coords", "model", "note", "point_id")) {
+    u[[k]] <- trimws(ifelse(is.na(u[[k]]), "", as.character(u[[k]])))
+  }
+  u$setting <- tolower(u$setting)
+  u$indicator <- tolower(u$indicator)
+  u$coords <- tolower(u$coords)
+  u$coords[u$coords %in% c("paleo", "palaeo")] <- "palaeo"
+  u$coords[u$coords != "palaeo"] <- "present"
+  u$model[u$model == ""] <- "scotese_and_wright2018"
+  u$active <- .as_flag(u$active)
+  u$active[is.na(u$active)] <- TRUE
   u$age_old[is.na(u$age_old)] <- u$age_young[is.na(u$age_old)]
   u$age_young[is.na(u$age_young)] <- u$age_old[is.na(u$age_young)]
+  sw <- is.finite(u$age_young) & is.finite(u$age_old) & u$age_young > u$age_old
+  if (any(sw)) {
+    tmp <- u$age_young[sw]
+    u$age_young[sw] <- u$age_old[sw]
+    u$age_old[sw] <- tmp
+  }
   bad <- !(u$setting %in% c("marine", "marine_deep", "evaporite", "terrestrial", ""))
-  if (any(bad)) stop("user_points.csv: setting must be marine, marine_deep, evaporite, terrestrial or empty (rows ",
-                     paste(which(bad), collapse = ", "), ")")
+  if (any(bad)) {
+    warning("user_points.csv: setting must be marine, marine_deep, evaporite, terrestrial or empty; rows ",
+        paste(which(bad) + 1, collapse = ", "), " are not used for the correction", call. = FALSE)
+    u$setting[bad] <- ""
+  }
+  # every point needs its own ID (empty or repeated IDs would make edits hit the wrong point)
+  no_id <- u$point_id == ""
+  u$point_id[no_id] <- sprintf("row%d", which(no_id) + 1)
+  dup <- duplicated(u$point_id)
+  if (any(dup)) {
+    warning("user_points.csv: repeated point_id renamed: ", paste(unique(u$point_id[dup]), collapse = ", "), call. = FALSE)
+    u$point_id <- make.unique(u$point_id, sep = "_")
+  }
   u[, USER_POINT_COLS]
 }
 
 read_record_edits <- function(cfg = SILUCARB) {
   f <- points_file("record_edits.csv", cfg)
   if (!file.exists(f)) init_user_tables(cfg)
-  e <- read.csv(f, stringsAsFactors = FALSE, na.strings = c("NA"))
-  for (k in setdiff(EDIT_COLS, names(e))) e[[k]] <- NA
-  e$value[is.na(e$value)] <- ""
-  e[, EDIT_COLS]
+  e <- .read_points_csv(f, c("record_id", "action"))
+  for (k in setdiff(EDIT_COLS, names(e))) e[[k]] <- rep(NA, nrow(e))
+  for (k in EDIT_COLS) {
+    e[[k]] <- trimws(ifelse(is.na(e[[k]]), "", as.character(e[[k]])))
+  }
+  e$action <- tolower(e$action)
+  bad <- e$record_id == "" | e$action == ""
+  if (any(bad)) {
+    warning("record_edits.csv: rows without record_id or action are ignored (rows ", paste(which(bad) + 1, collapse = ", "), ")",
+        call. = FALSE)
+  }
+  e[!bad, EDIT_COLS]
+}
+
+# Writes a points table; a file that is open in Excel (locked on Windows) gives a clear message instead of a
+# crash, and nothing is changed
+.write_points_csv <- function(d, f) {
+  ok <- tryCatch(suppressWarnings({
+    tmp <- paste0(f, ".tmp")
+    utils::write.csv(d, tmp, row.names = FALSE, fileEncoding = "UTF-8")
+    if (!file.rename(tmp, f)) {
+      if (!file.copy(tmp, f, overwrite = TRUE)) {
+        stop("locked")
+      }
+      unlink(tmp)
+    }
+    TRUE
+  }), error = function(e) { FALSE })
+  if (!ok) {
+    unlink(paste0(f, ".tmp"))
+    stop(sprintf("Could not save %s: the file is open in another program (e.g. Excel) or read-only. Close it and try again; nothing was changed.",
+        basename(f)), call. = FALSE)
+  }
+  invisible(TRUE)
 }
 
 #' convert palaeo-coordinate user points to present day (needed to use them at
@@ -154,6 +248,11 @@ user_points_present <- function(u) {
   u$lat_present <- ifelse(u$coords == "present", u$lat, NA)
   u$lon_present <- ifelse(u$coords == "present", u$lon, NA)
   pal <- which(u$coords == "palaeo" & is.finite(u$lat) & is.finite(u$clicked_age))
+  lost <- u$coords == "palaeo" & !is.finite(u$clicked_age)
+  if (any(lost)) {
+    warning("user points in palaeo-coordinates need clicked_age (the map age they belong to); not used: ",
+        paste(u$point_id[lost], collapse = ", "), call. = FALSE)
+  }
   if (length(pal)) {
     grp <- split(pal, paste(u$model[pal], u$clicked_age[pal]))
     for (g in grp) {                       # one pyGPlates call per (model, age)
@@ -166,14 +265,22 @@ user_points_present <- function(u) {
 
 # The classification rules are in records.R. A checksum of that file is stored next to records_base.csv, so the
 # table is rebuilt when the rules change, but not when an update of the package only gives the file a new date.
+# The settings in config.R that the classification uses are part of the checksum too.
+RECORD_RULE_KEYS <- c("terrestrial_env", "evaporite_lith", "reef_env", "pbdb_max_age_range", "macro_max_age_range")
+.records_rules_hash <- function(src, cfg) {
+  tf <- tempfile()
+  on.exit(unlink(tf), add = TRUE)
+  writeLines(c(unname(tools::md5sum(src)), deparse(cfg[RECORD_RULE_KEYS])), tf)
+  unname(tools::md5sum(tf))
+}
 records_rules_stamp <- function(cfg = SILUCARB) {
   src <- file.path(cfg$dir_R, "records.R")
   if (file.exists(src)) {
-    writeLines(unname(tools::md5sum(src)), paste0(points_file("records_base.csv", cfg), ".rules"))
+    writeLines(.records_rules_hash(src, cfg), paste0(points_file("records_base.csv", cfg), ".rules"))
   }
   invisible(NULL)
 }
-records_rules_changed <- function(f, src) {
+records_rules_changed <- function(f, src, cfg = SILUCARB) {
   if (!file.exists(src)) {
     return(FALSE)
   }
@@ -182,11 +289,11 @@ records_rules_changed <- function(f, src) {
     # tables from before the checksum: compare dates as before, then keep the checksum
     changed <- file.mtime(src) > file.mtime(f)
     if (!changed) {
-      writeLines(unname(tools::md5sum(src)), stamp)
+      writeLines(.records_rules_hash(src, cfg), stamp)
     }
     return(changed)
   }
-  !identical(readLines(stamp, warn = FALSE)[1], unname(tools::md5sum(src)))
+  !identical(readLines(stamp, warn = FALSE)[1], .records_rules_hash(src, cfg))
 }
 
 #' all records after applying your edits and adding your points
@@ -195,7 +302,7 @@ all_records <- function(cfg = SILUCARB, include_inactive = FALSE) {
   f <- points_file("records_base.csv", cfg)
   src <- file.path(cfg$dir_R, "records.R")              # classification rules changed -> rebuild
   newest <- suppressWarnings(max(file.mtime(unlist(record_source_files(cfg)))))
-  if (!file.exists(f) || records_rules_changed(f, src) ||
+  if (!file.exists(f) || records_rules_changed(f, src, cfg) ||
       (is.finite(newest) && newest > file.mtime(f))) build_base_records(cfg)
   base <- read.csv(f, stringsAsFactors = FALSE, na.strings = "NA")
   base$setting[is.na(base$setting)] <- ""; base$indicator[is.na(base$indicator)] <- ""
@@ -233,6 +340,8 @@ all_records <- function(cfg = SILUCARB, include_inactive = FALSE) {
   base
 }
 
+.NOT_YET_SAID <- new.env(parent = emptyenv())   # said once per age, model and purpose
+
 #' records used at map `age`, with palaeo-positions in `model`
 #' purpose = "dem": records with a setting, chosen by age range (DEM correction)
 #' purpose = "indicator": records with an indicator, chosen by mid-age within the window
@@ -249,10 +358,27 @@ records_for_age <- function(age, model = "scotese_and_wright2018", purpose = c("
   }
   if (!nrow(r)) return(cbind(r, plat = numeric(0), plon = numeric(0)))
   r$plat <- NA_real_; r$plon <- NA_real_
-  ok <- is.finite(r$lat)
+  # rows with impossible coordinates are left out (pyGPlates would stop on them)
+  ok <- is.finite(r$lat) & is.finite(r$lon) & abs(r$lat) <= 90
+  # (a point clicked on the palaeo-map of this age keeps its clicked position, also off any plate)
+  here <- r$coords == "palaeo" & !is.na(r$clicked_age) & r$clicked_age == age & r$model == model
+  bad_user <- !ok & !here & r$source == "user" & r$coords != "palaeo"
+  if (any(bad_user)) {
+    warning("user points with missing or impossible coordinates are not used: ",
+        paste(sub("^U:", "", r$record_id[bad_user]), collapse = ", "), call. = FALSE)
+  }
+  r$lon <- ((r$lon + 180) %% 360) - 180
   if (any(ok)) {
     p <- gp_reconstruct(r$lat[ok], r$lon[ok], rep(age, sum(ok)), model)
     r$plat[ok] <- p$plat; r$plon[ok] <- p$plon
+    if (any(p$not_yet)) {
+      key <- paste(age, model, purpose, sum(p$not_yet))
+      if (is.null(.NOT_YET_SAID[[key]])) {
+        assign(key, TRUE, envir = .NOT_YET_SAID)
+        message(sum(p$not_yet), " ", purpose, " record(s) at ", age, " Ma (", model, ") lie on crust that the plate model ",
+            "adds only later; they are not used")
+      }
+    }
   }
   # a point clicked on a palaeo map at this age in this model keeps its exact position
   same <- r$coords == "palaeo" & !is.na(r$clicked_age) & r$clicked_age == age & r$model == model
@@ -265,7 +391,7 @@ records_for_age <- function(age, model = "scotese_and_wright2018", purpose = c("
 #' permanently delete your own point(s) from user_points.csv (point_id, or "U:<id>")
 delete_user_point <- function(point_id, cfg = SILUCARB) {
   u <- read_user_points(cfg); id <- sub("^U:", "", point_id)
-  write.csv(u[!u$point_id %in% id, ], points_file("user_points.csv", cfg), row.names = FALSE)
+  .write_points_csv(u[!u$point_id %in% id, ], points_file("user_points.csv", cfg))
   invisible(sum(u$point_id %in% id))
 }
 
@@ -278,7 +404,7 @@ add_user_point <- function(lat, lon, setting = "marine", indicator = "", coords 
   row <- data.frame(point_id = id, setting = setting, indicator = indicator, lat = lat, lon = lon,
                     coords = coords, model = model, clicked_age = clicked_age, age_young = age_young,
                     age_old = age_old, active = TRUE, note = note, stringsAsFactors = FALSE)
-  write.csv(rbind(u, row), points_file("user_points.csv", cfg), row.names = FALSE)
+  .write_points_csv(rbind(u, row), points_file("user_points.csv", cfg))
   invisible(id)
 }
 
@@ -288,15 +414,18 @@ edit_record <- function(record_id, action = c("exclude", "include", "set_setting
   action <- match.arg(action)
   if (startsWith(record_id, "U:")) {          # own point: toggle its 'active' flag instead
     u <- read_user_points(cfg); i <- match(sub("^U:", "", record_id), u$point_id)
+    if (is.na(i)) {
+      stop("point ", record_id, " is not in user_points.csv (was the file changed outside the editor?)", call. = FALSE)
+    }
     if (action %in% c("exclude", "include")) u$active[i] <- action == "include"
     if (action == "set_setting") u$setting[i] <- value
     if (action == "set_indicator") u$indicator[i] <- value
-    write.csv(u, points_file("user_points.csv", cfg), row.names = FALSE)
+    .write_points_csv(u, points_file("user_points.csv", cfg))
     return(invisible(TRUE))
   }
   e <- read_record_edits(cfg)
   e <- rbind(e, data.frame(record_id = record_id, action = action, value = value, note = note))
-  write.csv(e, points_file("record_edits.csv", cfg), row.names = FALSE)
+  .write_points_csv(e, points_file("record_edits.csv", cfg))
   invisible(TRUE)
 }
 
@@ -309,10 +438,14 @@ read_localities <- function(cfg = SILUCARB) {
     dir.create(dirname(f), showWarnings = FALSE, recursive = TRUE)
     write.csv(cbind(cfg$sites, show = TRUE), f, row.names = FALSE)
   }
-  l <- read.csv(f, stringsAsFactors = FALSE)
-  if (!"show" %in% names(l)) l$show <- TRUE
-  l$show <- is.na(l$show) | as.logical(l$show)
-  l[is.finite(l$lat) & is.finite(l$lon) & nzchar(l$name), c("name", "lat", "lon", "show")]
+  l <- .read_points_csv(f, c("name", "lat", "lon"))
+  if (!"show" %in% names(l)) l$show <- NA
+  l$lat <- .as_num(l$lat)
+  l$lon <- .as_num(l$lon)
+  l$name <- trimws(ifelse(is.na(l$name), "", l$name))
+  l$show <- .as_flag(l$show)
+  l$show[is.na(l$show)] <- TRUE
+  l[is.finite(l$lat) & is.finite(l$lon) & abs(l$lat) <= 90 & nzchar(l$name), c("name", "lat", "lon", "show")]
 }
 #' write the localities; returns TRUE, or FALSE with attribute "msg" when the file
 #' cannot be written (usually because localities.csv is open in Excel or read-only)

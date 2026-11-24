@@ -30,13 +30,25 @@ say <- function(...) {
   cat(txt, "\n", sep = "")
   cat(txt, "\n", sep = "", file = log_file, append = TRUE)
 }
+`%+%` <- function(a, b) {
+  paste0(a, b)
+}
+# a value inside a PowerShell '...' string: a quote is doubled
+psq <- function(x) {
+  gsub("'", "''", x, fixed = TRUE)
+}
 win <- function(p) {
   normalizePath(p, winslash = "\\", mustWork = FALSE)
 }
+# Windows PowerShell 5.1 reads a script without byte-order mark as ANSI: write UTF-8 with a BOM, so folder names
+# with accents (e.g. C:/Users/Zoë) stay intact
 run_ps <- function(lines) {
   f <- tempfile(fileext = ".ps1")
   on.exit(unlink(f), add = TRUE)
-  writeLines(lines, f)
+  con <- file(f, "wb")
+  writeBin(as.raw(c(0xef, 0xbb, 0xbf)), con)
+  writeBin(charToRaw(enc2utf8(paste0(paste(lines, collapse = "\r\n"), "\r\n"))), con)
+  close(con)
   suppressWarnings(system2("powershell", c("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", shQuote(f)),
       stdout = TRUE, stderr = TRUE))
 }
@@ -53,6 +65,10 @@ if (length(args)) {
     num <- suppressWarnings(as.numeric(args))
     if (any(is.finite(num))) {
       ages <- num[is.finite(num)]
+    }
+    if (any(!is.finite(num))) {
+      say("Ignored argument(s): ", paste(args[!is.finite(num)], collapse = " "),
+          " (give ages as separate numbers, e.g. SETUP.bat 300 305 310, or all, or nodata)")
     }
   }
 }
@@ -107,18 +123,38 @@ say("R: ", R.version.string, " (", rscript, ")")
 vbs <- file.path(APP_DIR, "start_app.vbs")
 start_r <- win(file.path(APP_DIR, "start.R"))
 ok_file <- win(file.path(state_dir, "setup_ok.txt"))
-con <- file(vbs, "wb")
-writeLines(c(
+# the "already running" test asks the editor's own page (works in every Windows language, unlike netstat)
+vbs_lines <- c(
     'Set sh = CreateObject("WScript.Shell")',
     'Set fs = CreateObject("Scripting.FileSystemObject")',
-    sprintf('rc = sh.Run("cmd /c netstat -ano | findstr /R /C:"":%d .*LISTENING"" >nul", 0, True)', PORT),
-    "If rc = 0 Then",
-    sprintf('  sh.Run "http://127.0.0.1:%d", 1, False', PORT),
-    sprintf('ElseIf fs.FileExists("%s") Then', ok_file),
+    sprintf('url = "http://127.0.0.1:%d"', PORT),
+    "running = False",
+    "On Error Resume Next",
+    'Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")',
+    "http.setTimeouts 1000, 1000, 2000, 2000",
+    'http.Open "GET", url, False',
+    "http.Send",
+    "If Err.Number = 0 Then",
+    "  If http.Status = 200 Then running = True",
+    "End If",
+    "On Error GoTo 0",
+    "If running Then",
+    "  sh.Run url, 1, False",
+    "  WScript.Quit",
+    "End If",
+    sprintf('If Not fs.FileExists("%s") Then', rscript),
+    '  MsgBox "R was not found at ' %+% rscript %+% '. Run SETUP.bat in the PaleoMapR folder again (after installing or updating R).", 48, "PaleoMapR"',
+    "  WScript.Quit",
+    "End If",
+    sprintf('If fs.FileExists("%s") Then', ok_file),
     sprintf('  sh.Run """%s"" ""%s""", 0, False', rscript, start_r),
     "Else",
     sprintf('  sh.Run """%s"" ""%s""", 1, False', rscript, start_r),
-    "End If"), con, sep = "\r\n")
+    "End If")
+# UTF-16 with byte-order mark: Windows Script Host then reads paths with accents correctly
+con <- file(vbs, "wb")
+writeBin(as.raw(c(0xff, 0xfe)), con)
+writeBin(iconv(paste0(paste(vbs_lines, collapse = "\r\n"), "\r\n"), "UTF-8", "UTF-16LE", toRaw = TRUE)[[1]], con)
 close(con)
 
 # Desktop shortcut ####
@@ -127,9 +163,9 @@ say(paste(run_ps(c(
     "$w = New-Object -ComObject WScript.Shell",
     sprintf("$s = $w.CreateShortcut((Join-Path $desktop '%s.lnk'))", APP_TITLE),
     "$s.TargetPath = 'wscript.exe'",
-    sprintf("$s.Arguments = '\"%s\"'", win(vbs)),
-    sprintf("$s.WorkingDirectory = '%s'", win(APP_DIR)),
-    sprintf("$s.IconLocation = '%s,0'", win(file.path(APP_DIR, "paleomapr.ico"))),
+    sprintf("$s.Arguments = '\"%s\"'", psq(win(vbs))),
+    sprintf("$s.WorkingDirectory = '%s'", psq(win(APP_DIR))),
+    sprintf("$s.IconLocation = '%s,0'", psq(win(file.path(APP_DIR, "paleomapr.ico")))),
     "$s.Description = 'PaleoMapR: fossil-corrected paleogeographic maps'",
     "$s.Save()",
     sprintf("Write-Output 'Desktop shortcut written: %s.lnk'", APP_TITLE))), collapse = "\n"))

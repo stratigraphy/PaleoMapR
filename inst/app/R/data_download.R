@@ -12,18 +12,89 @@
 URL_PBDB  <- "https://paleobiodb.org/data1.2/colls/list.csv?interval=Silurian&show=loc,strat,lith,env,time"
 URL_MACRO <- "https://macrostrat.org/api/v2/units?age_top=410&age_bottom=450&format=json&response=long"
 
-#' download one file unless it exists (creates the folder; removes partial files)
-fetch <- function(url, dest, timeout = 3600) {
-  if (file.exists(dest) && file.info(dest)$size > 0) return(invisible(TRUE))
+# A downloaded file is only kept when it is complete: it is written to "<dest>.part", checked (zip, NetCDF,
+# JSON or CSV header, by extension) and then renamed. An interrupted download or an error page from a proxy is
+# therefore never taken for the real file.
+.download_ok <- function(path) {
+  ext <- tolower(tools::file_ext(sub("\\.part$", "", path)))
+  sz <- file.info(path)$size
+  if (!is.finite(sz) || sz == 0) {
+    return(FALSE)
+  }
+  head <- tryCatch(readBin(path, "raw", 16), error = function(e) { raw(0) })
+  txt <- tryCatch(rawToChar(head[head != as.raw(0)]), error = function(e) { "" })
+  if (grepl("^\\s*<", txt)) {
+    return(FALSE)
+  }
+  if (ext %in% c("zip", "xlsx")) {
+    return(!is.null(tryCatch(utils::unzip(path, list = TRUE), error = function(e) { NULL }, warning = function(w) { NULL })))
+  }
+  if (ext == "nc") {
+    nc <- tryCatch(suppressWarnings(ncdf4::nc_open(path)), error = function(e) { NULL })
+    if (is.null(nc)) {
+      return(FALSE)
+    }
+    ncdf4::nc_close(nc)
+    return(TRUE)
+  }
+  if (ext == "json") {
+    return(isTRUE(tryCatch(jsonlite::validate(paste(readLines(path, warn = FALSE), collapse = "\n")),
+        error = function(e) { FALSE })))
+  }
+  if (ext == "csv") {
+    first <- tryCatch(readLines(path, n = 12, warn = FALSE), error = function(e) { character(0) })
+    return(length(first) > 0 && any(grepl(",", first)))
+  }
+  TRUE
+}
+
+# URLs that failed in this R session, with the time: they are not tried again for 10 minutes, so an offline
+# computer does not wait for every download again at each rebuild
+.FETCH_FAILED <- new.env(parent = emptyenv())
+
+#' download one file unless it exists (creates the folder; keeps only complete files)
+fetch <- function(url, dest, timeout = 600, tries = 2) {
+  if (file.exists(dest) && isTRUE(file.info(dest)$size > 0)) {
+    return(invisible(TRUE))
+  }
+  t_fail <- .FETCH_FAILED[[url]]
+  if (!is.null(t_fail) && difftime(Sys.time(), t_fail, units = "mins") < 10) {
+    message("skipping ", basename(dest), ": its download failed a few minutes ago")
+    return(invisible(FALSE))
+  }
   dir.create(dirname(dest), showWarnings = FALSE, recursive = TRUE)
-  op <- options(timeout = max(timeout, getOption("timeout"))); on.exit(options(op))
+  op <- options(timeout = max(timeout, getOption("timeout")))
+  on.exit(options(op), add = TRUE)
+  part <- paste0(dest, ".part")
   message("downloading ", basename(dest), " ...")
-  ok <- tryCatch({ download.file(url, dest, mode = "wb", quiet = TRUE,
-                                 method = if (capabilities("libcurl")) "libcurl" else "auto"); TRUE },
-                 error = function(e) { message("  FAILED: ", conditionMessage(e)); FALSE },
-                 warning = function(w) { message("  FAILED: ", conditionMessage(w)); FALSE })
-  if (!ok || !file.exists(dest) || file.info(dest)$size == 0) {
-    if (file.exists(dest)) unlink(dest)
+  ok <- FALSE
+  for (k in seq_len(tries)) {
+    unlink(part)
+    got <- tryCatch({
+      utils::download.file(url, part, mode = "wb", quiet = TRUE,
+          method = if (capabilities("libcurl")) { "libcurl" } else { "auto" })
+      TRUE
+    }, error = function(e) {
+      message("  FAILED: ", conditionMessage(e))
+      FALSE
+    }, warning = function(w) {
+      message("  FAILED: ", conditionMessage(w))
+      FALSE
+    })
+    if (got && .download_ok(part)) {
+      ok <- file.rename(part, dest)
+      if (!ok) {
+        ok <- file.copy(part, dest, overwrite = TRUE)
+      }
+      break
+    }
+    if (got) {
+      message("  the downloaded file is incomplete or not the expected data")
+    }
+  }
+  unlink(part)
+  if (!ok) {
+    assign(url, Sys.time(), envir = .FETCH_FAILED)
     message("  download it by hand from\n  ", url, "\n  and save it as\n  ", dest)
     return(invisible(FALSE))
   }
@@ -52,15 +123,17 @@ ensure_records_for_ages <- function(ages, cfg = SILUCARB) {
   new <- FALSE
   for (w in seq(lo, hi - RECORD_WINDOW_MYR, by = RECORD_WINDOW_MYR)) {
     f <- .win_files(w, w + RECORD_WINDOW_MYR, cfg)
-    legacy_ok <- w == 400 && file.exists(cfg$file_pbdb) && file.exists(cfg$file_macro)   # Silurian files
+    # the Silurian start-up files do not cover the whole 400-450 Ma window (PBDB: Silurian only), so the
+    # window files are always downloaded; duplicates are removed when the record table is built
+    legacy_ok <- FALSE
     if (!file.exists(f$pbdb) && !legacy_ok) {
       ok <- fetch(sprintf("https://paleobiodb.org/data1.2/colls/list.csv?max_ma=%d&min_ma=%d&timerule=overlap&show=loc,strat,lith,env,time",
-                          w + RECORD_WINDOW_MYR, w), f$pbdb)
+                          w + RECORD_WINDOW_MYR, w), f$pbdb, timeout = 300)
       new <- new || ok
     }
     if (!file.exists(f$macro) && !legacy_ok) {
       ok <- fetch(sprintf("https://macrostrat.org/api/v2/units?age_top=%d&age_bottom=%d&format=json&response=long",
-                          w, w + RECORD_WINDOW_MYR), f$macro)
+                          w, w + RECORD_WINDOW_MYR), f$macro, timeout = 300)
       new <- new || ok
     }
   }
@@ -113,6 +186,11 @@ download_data <- function(cfg = SILUCARB, timeout = 3600) {
           if (!is.na(src)) file.copy(src, cfg$dir_coast, recursive = TRUE)
         }
       }
+      if (!dir.exists(file.path(cfg$dir_coast, "CS"))) {
+        # a damaged zip would otherwise be reused by every later run
+        unlink(z)
+        message("  the PaleoCoastlines zip could not be unpacked; run the setup again")
+      }
     }
   }
   download_dems(cfg, timeout)                        # PaleoDEMs 0.2 deg (~280 MB zip)
@@ -122,8 +200,12 @@ download_data <- function(cfg = SILUCARB, timeout = 3600) {
     z <- file.path(cfg$dir_data, "PaleoDEMs_1deg_nc.zip")
     if (fetch("https://www.earthbyte.org/webdav/ftp/Data_Collections/Scotese_Wright_2018_PaleoDEM/Scotese_Wright_2018_Maps_1-88_1degX1deg_PaleoDEMS_nc.zip", z, timeout)) {
       dir.create(d1, showWarnings = FALSE, recursive = TRUE)
-      lst <- unzip(z, list = TRUE)$Name
-      unzip(z, files = lst[grepl("Ma\\.nc$", lst)], exdir = d1, junkpaths = TRUE)
+      lst <- tryCatch(unzip(z, list = TRUE)$Name, error = function(e) { NULL })
+      if (is.null(lst)) {
+        unlink(z)
+      } else {
+        unzip(z, files = lst[grepl("Ma\\.nc$", lst)], exdir = d1, junkpaths = TRUE)
+      }
     }
   }
   ok <- c(PBDB = file.exists(cfg$file_pbdb), Macrostrat = file.exists(cfg$file_macro),

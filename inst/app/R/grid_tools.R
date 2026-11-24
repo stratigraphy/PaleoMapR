@@ -118,7 +118,7 @@ smooth_km <- function(a, lat, sigma_km, nbands = 45) {
   sy <- sigma_km / (dl * KM_PER_DEG)
   b <- gauss_lat(a, sy); out <- b
   for (rows in split(seq_len(nlat), cut(seq_len(nlat), nbands, labels = FALSE))) {
-    cc <- max(cos(pi / 180 * min(abs(lat[rows]))), 0.05)
+    cc <- max(mean(cos(pi / 180 * lat[rows])), 0.05)
     out[rows, ] <- gauss_lon(b[rows, , drop = FALSE], min(sy / cc, nlon / 8))
   }
   out
@@ -148,7 +148,7 @@ edt <- function(x, pad = 30) dist_cells(!x, pad)
 #' y (terra::distance assumes square cells): vertical distance to the nearest
 #' target in each column, then the minimum over horizontal offsets. Exact up to
 #' max_km; beyond that only guaranteed to be > max_km.
-dist_km <- function(target, lat, rows_per_band = 30, max_km = 700) {
+dist_km <- function(target, lat, rows_per_band = 15, max_km = 700) {
   nlat <- nrow(target); p <- ncol(target); dl <- abs(lat[2] - lat[1]); dy <- dl * KM_PER_DEG
   if (!any(target)) return(matrix(Inf, nlat, p))
   g <- matrix(Inf, nlat, p)                       # rows to the nearest target in the column
@@ -159,7 +159,7 @@ dist_km <- function(target, lat, rows_per_band = 30, max_km = 700) {
   g2 <- (g * dy)^2
   out <- matrix(Inf, nlat, p)
   for (rows in split(seq_len(nlat), ceiling(seq_len(nlat) / rows_per_band))) {
-    cc <- max(cos(pi / 180 * min(abs(lat[rows]))), 0.05); dx <- dy * cc
+    cc <- max(mean(cos(pi / 180 * lat[rows])), 0.05); dx <- dy * cc   # mean east-west cell size of the band
     gb <- g2[rows, , drop = FALSE]
     if (all(!is.finite(gb))) next
     K <- min(ceiling(max_km / dx), p %/% 2)

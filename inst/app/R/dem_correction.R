@@ -18,10 +18,15 @@
 # ------------------------------------------------------------------ helpers ----
 .cos_clip <- function(lat, lo = 0.05) pmin(pmax(cos(pi / 180 * lat), lo), 1)
 
-#' grid (row, col) positions -> local km coordinates (east-west scaled by cos lat)
+#' grid (row, col) positions (fractional allowed) -> 3-D km coordinates on the sphere. Distances between them
+#' are chord lengths, equal to the great-circle distance within 0.1 % up to 1000 km, in every direction and at
+#' every longitude (the columns are only relative; a column 360 deg further is the same point)
 .to_km <- function(i, j, lat) {
-  dl <- abs(lat[2] - lat[1]); n <- length(lat)
-  cbind(i * dl * KM_PER_DEG, j * dl * KM_PER_DEG * .cos_clip(lat[pmin(pmax(round(i), 1), n)]))
+  dl <- abs(lat[2] - lat[1])
+  R <- KM_PER_DEG * 180 / pi
+  la <- (lat[1] + (i - 1) * (lat[2] - lat[1])) * pi / 180
+  lo <- (j - 1) * dl * pi / 180
+  cbind(R * cos(la) * cos(lo), R * cos(la) * sin(lo), R * sin(la))
 }
 .unwrap <- function(x, p) { if (length(x) < 2) return(x); d <- diff(x); d <- d - p * round(d / p); c(x[1], x[1] + cumsum(d)) }
 .wrapj <- function(j, p) ((j - 1) %% p) + 1
@@ -29,6 +34,17 @@
 #' smooth random field (sd 1) that is isotropic on the sphere (sum of random
 #' plane waves in 3-D): no north-south streaks at high latitude. 300-1500 km.
 fractal_noise <- function(lat, lon, seed) {
+  # a fixed seed for reproducible maps, without changing the random numbers of the R session
+  old_seed <- if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) { get(".Random.seed", envir = globalenv()) } else { NULL }
+  on.exit({
+    if (is.null(old_seed)) {
+      if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) {
+        rm(".Random.seed", envir = globalenv())
+      }
+    } else {
+      assign(".Random.seed", old_seed, envir = globalenv())
+    }
+  }, add = TRUE)
   set.seed(seed)
   LA <- matrix(pi / 180 * lat, length(lat), length(lon)); LO <- matrix(pi / 180 * lon, length(lat), length(lon), byrow = TRUE)
   X <- cos(LA) * cos(LO); Y <- cos(LA) * sin(LO); Z <- sin(LA); rm(LA, LO)
@@ -524,7 +540,7 @@ enforce_widening <- function(zc, lat, paths, zref, cfg, tol_km = cfg$WIDEN_TOL_K
       run <- cummax(hw)
       for (q in which(hw < run - tol_km)) {
         k <- k_new[q]; rr <- run[q]
-        near <- (G[, 1] - Q[k, 1])^2 + (G[, 2] - Q[k, 2])^2 <= rr^2
+        near <- (G[, 1] - Q[k, 1])^2 + (G[, 2] - Q[k, 2])^2 + (G[, 3] - Q[k, 3])^2 <= rr^2
         cells <- cbind(GI[near], GJw[near])
         sel <- z[cells] >= 0
         if (any(sel)) { z[cells[sel, , drop = FALSE]] <- cfg$SEAWAY_DEPTH; changed <- TRUE; widened <- widened + sum(sel) }
@@ -595,7 +611,9 @@ correct_dem <- function(age, recs, cfg = SILUCARB, write = TRUE, verbose = TRUE)
       if ((set$depth == cfg$SEA_DEPTH && zz[k] < 0) || (set$depth == cfg$EVAP_DEPTH && zz[k] <= 0)) next
       la <- set$d$plat[k]; lo <- set$d$plon[k]
       i0 <- round((la - lat[1]) / dl) + 1; j0 <- round((lo - lon[1]) / dl)
-      ii <- (i0 - nr):(i0 + nr); ii <- ii[ii >= 1 & ii <= n]; jj <- ((j0 - nr):(j0 + nr)) %% p + 1
+      # the east-west window widens with latitude, so the patch is round (not cut off) at high latitude
+      nrj <- min(ceiling(2 * cfg$R_POINT / (dl * max(cos(pi / 180 * la), 0.05))) + 1, floor((p - 1) / 2))
+      ii <- (i0 - nr):(i0 + nr); ii <- ii[ii >= 1 & ii <= n]; jj <- ((j0 - nrj):(j0 + nrj)) %% p + 1
       sla <- matrix(lat[ii], length(ii), length(jj)); slo <- matrix(lon[jj], length(ii), length(jj), byrow = TRUE)
       dlon <- (slo - lo + 180) %% 360 - 180
       dist <- sqrt((sla - la)^2 + (dlon * cos(pi / 180 * la))^2)

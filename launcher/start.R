@@ -17,5 +17,12 @@ options(PaleoMapR.launcher = APP_DIR)
 if (!file.exists(file.path(APP_DIR, "state", "setup_ok.txt"))) {
   cat("The data setup is not finished: the editor downloads the basic data first (about 400 MB).\n",
       "Running SETUP.bat again prepares everything, including the climate files and corrected grids.\n\n", sep = "")
+} else {
+  # R runs without a window: its messages go to state/app_log.txt (useful when something goes wrong)
+  dir.create(file.path(APP_DIR, "state"), showWarnings = FALSE)
+  log_con <- file(file.path(APP_DIR, "state", "app_log.txt"), open = "wt")
+  sink(log_con)
+  sink(log_con, type = "message")
+  cat("PaleoMapR started", format(Sys.time()), "\n")
 }
 PaleoMapR::run_app(folder = APP_DIR, port = 7793L, launch.browser = TRUE, stop_on_close = TRUE)

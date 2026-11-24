@@ -56,22 +56,47 @@ season_months <- function(season) switch(season, ann = 1:12, djf = c(12, 1, 2), 
                                          match(season, tolower(month.abb)))
 CLIMATE_URL <- "https://www.paleo.bristol.ac.uk/ummodel/data/%s/climate/%s"
 
-#' download with up to 3 tries (the server sometimes drops a connection)
+#' download with up to 3 tries (the server sometimes drops a connection); TRUE if the file is there
 .fetch_retry <- function(url, dest, tries = 3) {
-  for (k in seq_len(tries)) { if (file.exists(dest) || isTRUE(fetch(url, dest))) return(invisible(TRUE)); Sys.sleep(2) }
-  invisible(file.exists(dest))
+  if (file.exists(dest)) {
+    return(invisible(TRUE))
+  }
+  invisible(isTRUE(fetch(url, dest, timeout = 300, tries = tries)))
 }
 
 #' the model run closest in age
 climate_exp <- function(age) CLIMATE_EXPS[which.min(abs(CLIMATE_EXPS$age - age)), ]
 
+# Folder of a run's files. Run IDs differ only in upper / lower case for 39 pairs (e.g. teXPh 425.2 Ma and teXph
+# 297 Ma); Windows and macOS do not distinguish case in file names, so the folder also carries the model age.
+.climate_dir <- function(e, cfg = SILUCARB) {
+  file.path(cfg$dir_data, "climate", sprintf("%s_%sMa", e$id, format(e$age)))
+}
+
+# A newly downloaded climate file must hold a real field: a cut-off file can open but read as constants
+.climate_file_ok <- function(file, var) {
+  v <- tryCatch(.read_clim_var(file, var)$z, error = function(e) { NULL })
+  !is.null(v) && sum(is.finite(v)) > 100 && isTRUE(stats::sd(v, na.rm = TRUE) > 0)
+}
+
 #' download the files for one age and season (once; ~1.3 MB atmosphere + 0.5 MB ocean)
 climate_files <- function(age, season = "ann", cfg = SILUCARB) {
-  e <- climate_exp(age); d <- file.path(cfg$dir_data, "climate", e$id)
+  e <- climate_exp(age)
+  d <- .climate_dir(e, cfg)
   f <- c(atm = file.path(d, sprintf("%sa.pdcl%s.nc", e$id, season)),
-         ocn = file.path(d, sprintf("%so.pfcl%s.nc", e$id, season)))
-  for (k in names(f)) .fetch_retry(sprintf(CLIMATE_URL, e$id, basename(f[[k]])), f[[k]])
-  if (!all(file.exists(f))) stop("climate data for ", age, " Ma could not be downloaded (see the message above)", call. = FALSE)
+      ocn = file.path(d, sprintf("%so.pfcl%s.nc", e$id, season)))
+  test_var <- c(atm = "precip_mm_srf", ocn = "salinity_mm_dpth")
+  for (k in names(f)) {
+    is_new <- !file.exists(f[[k]])
+    .fetch_retry(sprintf(CLIMATE_URL, e$id, basename(f[[k]])), f[[k]])
+    if (is_new && file.exists(f[[k]]) && !.climate_file_ok(f[[k]], test_var[[k]])) {
+      unlink(f[[k]])
+      message("  ", basename(f[[k]]), " is damaged and was removed; it is downloaded again next time")
+    }
+  }
+  if (!all(file.exists(f))) {
+    stop("climate data for ", age, " Ma could not be downloaded (see the message above)", call. = FALSE)
+  }
   f
 }
 
@@ -110,7 +135,11 @@ climate_fields <- function(age, season = "ann", cfg = SILUCARB) {
   fillsea <- function(F) { if (exists(".fill_from")) F$z <- .fill_from(F$z, is.finite(F$z), iters = 60); F }  # into new seaways
   sal <- .read_clim_var(f[["ocn"]], "salinity_mm_dpth"); sal$z <- sal$z * 1000 + 35; out$salinity <- fillsea(sal)
   w <- .read_clim_var(f[["ocn"]], "W_mm_dpth"); w$z <- w$z * 864; out$w_ocean <- fillsea(w)
-  out$mld <- fillsea(.read_clim_var(f[["ocn"]], "mixLyrDpth_mm_uo"))
+  # the mixed-layer depth is 0 (not missing) on model land: make it missing there, so new seaways get the
+  # depth of the nearby sea instead of 0 m
+  mld <- .read_clim_var(f[["ocn"]], "mixLyrDpth_mm_uo")
+  mld$z[!is.finite(sal$z)] <- NA
+  out$mld <- fillsea(mld)
   sst <- .read_clim_var(f[["ocn"]], "temp_mm_dpth"); out$sst_ocean <- fillsea(sst)          # C, 5 m
   .CLIM[[key]] <- out
   out
@@ -143,7 +172,7 @@ precip_on_grid <- function(cl, lat, lon) {
 precip_colour <- function(p) {
   x <- pmin(pmax(p, 0), 12); s <- .PRECIP_STOPS; pos <- seq(0, 1, length.out = length(s$p))
   f <- approx(s$p, pos, xout = x)$y; rgbm <- col2rgb(s$col) / 255
-  sapply(1:3, function(k) approx(pos, rgbm[k, ], xout = f)$y)
+  .approx3(pos, rgbm, f)
 }
 #' RGB image of precipitation with relief shading on land; the sea is drawn paler
 render_precip_rgb <- function(z, lat, pr) {
@@ -306,7 +335,7 @@ climate_caption <- function(climate) {
 temp_colour <- function(t) {
   s <- .TEMP_STOPS; x <- pmin(pmax(t, min(s$t)), max(s$t)); pos <- seq(0, 1, length.out = length(s$t))
   f <- approx(s$t, pos, xout = x)$y; rgbm <- col2rgb(s$col) / 255
-  sapply(1:3, function(k) approx(pos, rgbm[k, ], xout = f)$y)
+  .approx3(pos, rgbm, f)
 }
 render_temp_rgb <- function(z, lat, tt) {
   rgb <- array(temp_colour(as.vector(tt)), c(nrow(z), ncol(z), 3)); hs <- hillshade(z, lat); land <- z >= 0
@@ -351,7 +380,7 @@ climate_colour_bar <- function(side, climate) {
 .diverging <- function(x, lim, neg = c("#8c510a", "#d8b365", "#f6e8c3"), pos = c("#c7eae5", "#5ab4ac", "#01665e")) {
   cols <- col2rgb(c(neg, "#f7f7f7", pos)) / 255; pos_ <- seq(-1, 1, length.out = ncol(cols))
   f <- pmax(pmin(x / lim, 1), -1)
-  sapply(1:3, function(k) approx(pos_, cols[k, ], xout = f)$y)
+  .approx3(pos_, cols, f)
 }
 CHANGE_LIMITS <- c(precipitation_change = 3, temperature_change = 5)
 #' a round colour-scale limit for a change field (98 % of the values inside)
@@ -444,7 +473,7 @@ SCALAR_LAYERS <- list(
 .seq_colour <- function(v, L) {
   pos <- seq(0, 1, length.out = length(L$stops)); x <- pmin(pmax(v, min(L$stops)), max(L$stops))
   f <- approx(L$stops, pos, xout = x)$y; m <- col2rgb(L$col) / 255
-  sapply(1:3, function(k) approx(pos, m[k, ], xout = f)$y)
+  .approx3(pos, m, f)
 }
 #' the limit / stops of a layer for a field (auto for diverging layers)
 scalar_scale <- function(layer, F, season, z = NULL) {
@@ -499,8 +528,46 @@ colour_bar_scalar <- function(side = 1, layer, season = "ann", L) {
     mtext(sprintf("%s (%s)", sub(" \\(.*", "", L$title), u), side = side, line = 2.3, cex = 0.62, col = "#52514e")
   }
 }
-#' a field on a map grid, keeping gaps (NA) where the field has none (e.g. the ocean on land)
-.scalar_on_grid <- function(F, lat, lon) {
+# Extends a coarse field a few cells beyond its gaps (mean of the known neighbours, longitude wraps), so that
+# interpolating it to the map does not leave a blank strip along the model's coasts; the map's own land / sea
+# mask decides afterwards where the layer is drawn
+.extend_field <- function(z, iters = 2) {
+  nr <- nrow(z)
+  nc <- ncol(z)
+  for (it in seq_len(iters)) {
+    na <- !is.finite(z)
+    if (!any(na)) {
+      break
+    }
+    s <- matrix(0, nr, nc)
+    n <- s
+    shifts <- list(c(-1, 0), c(1, 0), c(0, -1), c(0, 1))
+    for (k in seq_along(shifts)) {
+      sh <- shifts[[k]]
+      i <- pmin(pmax(seq_len(nr) + sh[1], 1), nr)
+      j <- ((seq_len(nc) - 1 + sh[2]) %% nc) + 1
+      v <- z[i, j]
+      ok <- is.finite(v)
+      s[ok] <- s[ok] + v[ok]
+      n <- n + ok
+    }
+    upd <- na & n > 0
+    z[upd] <- s[upd] / n[upd]
+  }
+  z
+}
+
+#' a field on a map grid, keeping gaps (NA) where the field has none (e.g. the ocean far inland); classes
+#' (type "cat") are taken from the nearest model cell instead of being interpolated
+.scalar_on_grid <- function(F, lat, lon, type = "seq") {
+  if (identical(type, "cat")) {
+    i <- findInterval(lat, (F$lat[-1] + F$lat[-length(F$lat)]) / 2) + 1
+    dlon <- F$lon[2] - F$lon[1]
+    j <- (round((((lon - F$lon[1]) %% 360)) / dlon) %% length(F$lon)) + 1
+    z <- .extend_field(F$z, 2)
+    return(z[i, j, drop = FALSE])
+  }
+  F$z <- .extend_field(F$z, 2)
   g <- expand.grid(lon = lon, lat = lat)
   matrix(clim_interp(F, g$lat, g$lon), length(lat), length(lon), byrow = TRUE)
 }

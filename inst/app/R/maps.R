@@ -22,7 +22,19 @@ library(sf); library(png)
   f <- (pmin(pmax(z, min(st$z)), max(st$z)) - min(st$z)) / (max(st$z) - min(st$z))
   pos <- (st$z - min(st$z)) / (max(st$z) - min(st$z))
   rgbm <- col2rgb(st$col) / 255
-  sapply(1:3, function(k) approx(pos, rgbm[k, ], xout = f)$y)
+  .approx3(pos, rgbm, f)
+}
+# colour of every value f (0-1 positions) from colour stops at pos (columns of m: R, G, B); always an [n x 3]
+# matrix, also for no values (sapply gave a list then, e.g. a zoomed-in map without land)
+.approx3 <- function(pos, m, f) {
+  out <- matrix(NA_real_, length(f), 3)
+  if (!length(f)) {
+    return(out)
+  }
+  for (k in 1:3) {
+    out[, k] <- approx(pos, m[k, ], xout = f)$y
+  }
+  out
 }
 #' z (matrix) -> RGB array [n, p, 3]
 colourise <- function(z) {
@@ -37,7 +49,7 @@ hillshade <- function(z, lat, az = 315, alt = 40, exag_land = 60, exag_sea = 8) 
   n <- nrow(z)
   gy <- rbind(zz[2, ] - zz[1, ], (zz[3:n, ] - zz[1:(n - 2), ]) / 2, zz[n, ] - zz[n - 1, ]) / d
   gx <- (shift(zz, 0, 1) - shift(zz, 0, -1)) / 2 / dx
-  slope <- atan(sqrt(gx^2 + gy^2)); aspect <- atan2(-gx, gy)
+  slope <- atan(sqrt(gx^2 + gy^2)); aspect <- atan2(-gx, -gy)   # azimuth of the downslope direction (row 1 = south)
   a <- az * pi / 180; b <- alt * pi / 180
   hs <- sin(b) * cos(slope) + cos(b) * sin(slope) * cos(a - aspect)
   pmin(pmax(hs, 0), 1)
@@ -112,7 +124,10 @@ PROJ_LABEL <- c(mollweide = "Mollweide", robinson = "Robinson", equal_earth = "E
   p }
 map_crs <- function(cfg = SILUCARB) {
   if (!is.null(cfg$view)) return(cfg$view$crs)
-  sprintf("+proj=%s +lon_0=%g +datum=WGS84 +units=m +no_defs", PROJ_GLOBAL[[.proj_name(cfg)]], cfg$central_lon)
+  pn <- .proj_name(cfg)
+  # Winkel tripel needs its standard parallel (PROJ's default is 0, which gives Aitoff-like proportions)
+  extra <- if (pn == "winkel_tripel") { " +lat_1=50.467" } else { "" }
+  sprintf("+proj=%s%s +lon_0=%g +datum=WGS84 +units=m +no_defs", PROJ_GLOBAL[[pn]], extra, cfg$central_lon)
 }
 #' outline of a whole-globe map: the two edge meridians (x, y in map units, right edge first)
 .global_outline <- function(cfg) {
@@ -211,6 +226,13 @@ make_view <- function(region, age, model, cfg = SILUCARB) {
                        else "the chosen point"))
 }
 #' regional views: hide what lies more than ~100 deg from the centre (far side of the globe)
+# map coordinates of points; points on the far side of a globe or outside a round map get NA (not drawn)
+.visible_xy <- function(lon, lat, cfg) {
+  xy <- sf_project("EPSG:4326", map_crs(cfg), cbind(lon, lat), keep = TRUE, warn = FALSE)
+  hide <- !is.finite(lon) | !is.finite(lat) | .far(lon, lat, cfg)
+  xy[hide, ] <- NA
+  xy
+}
 .far <- function(lon, lat, cfg) {
   if (is.null(cfg$view)) return(rep(FALSE, length(lon)))
   v <- cfg$view
@@ -258,10 +280,8 @@ make_view <- function(region, age, model, cfg = SILUCARB) {
   a
 }
 
-project_rgb <- function(rgb, lat, lon, width, cfg = SILUCARB, wrap = TRUE) {
-  if (isTRUE(cfg$view$fast_eqc)) {
-    return(.project_rgb_eqc(rgb, lat, lon, width, cfg))
-  }
+# RGB lat-lon image -> map pixels with terra (GDAL warp, bilinear)
+.project_rgb_terra <- function(rgb, lat, lon, width, cfg, wrap) {
   dl <- abs(lat[2] - lat[1]); e <- if (wrap) 1 else 0
   p <- dim(rgb)[2]; if (wrap) rgb <- rgb[, c(p, seq_len(p), 1), , drop = FALSE]   # wrap one column: no gap at 180 deg
   src <- rast(nrows = length(lat), ncols = length(lon) + 2 * e, nlyrs = 3,
@@ -272,7 +292,85 @@ project_rgb <- function(rgb, lat, lon, width, cfg = SILUCARB, wrap = TRUE) {
   tmpl <- rast(nrows = max(10, round(width * diff(yl) / diff(xl))), ncols = width, xmin = xl[1], xmax = xl[2],
                ymin = yl[1], ymax = yl[2], crs = map_crs(cfg), nlyrs = 3)
   pr <- suppressWarnings(project(src, tmpl, method = "bilinear"))   # cells beyond the poles: harmless
-  a <- as.array(pr)
+  as.array(pr)
+}
+
+# RGB lat-lon image -> map pixels by inverse-projecting every pixel centre and sampling the image bilinearly
+# (used for Winkel tripel, and when terra cannot warp a window)
+.project_rgb_inverse <- function(rgb, lat, lon, width, cfg, wrap) {
+  xl <- view_xlim(cfg)
+  yl <- view_ylim(cfg)
+  h <- max(10, round(width * diff(yl) / diff(xl)))
+  xc <- seq(xl[1], xl[2], length.out = width + 1)
+  xc <- (xc[-1] + xc[-length(xc)]) / 2
+  yc <- seq(yl[2], yl[1], length.out = h + 1)
+  yc <- (yc[-1] + yc[-length(yc)]) / 2
+  px <- rep(xc, each = h)
+  py <- rep(yc, times = width)
+  # only pixels inside the map outline are projected (PROJ reports every point outside it)
+  inside <- rep(TRUE, length(px))
+  if (is.null(cfg$view)) {
+    E <- .global_ext(cfg)
+    o <- order(E$ey)
+    xe <- approx(E$ey[o], abs(E$ex[o]), py, ties = max, rule = 2)$y
+    inside <- abs(px) < xe * 0.9995 & abs(py) < max(abs(E$ey)) * 0.9995
+  } else if (.is_disc(cfg)) {
+    inside <- px^2 + py^2 < (cfg$view$disc * 0.9995)^2
+  }
+  ll <- matrix(NA_real_, length(px), 2)
+  ll[inside, ] <- sf_project(map_crs(cfg), "EPSG:4326", cbind(px[inside], py[inside]), keep = TRUE, warn = FALSE)
+  # PROJ inverses may return points outside the map's own outline; a forward check removes them
+  back <- matrix(NA_real_, length(px), 2)
+  okll <- is.finite(ll[, 1]) & is.finite(ll[, 2])
+  back[okll, ] <- sf_project("EPSG:4326", map_crs(cfg), ll[okll, , drop = FALSE], keep = TRUE, warn = FALSE)
+  tol <- 1e-3 * diff(xl)
+  good <- okll & is.finite(back[, 1]) & abs(back[, 1] - px) < tol & abs(back[, 2] - py) < tol
+  nl <- length(lat)
+  nc <- length(lon)
+  dla <- (lat[nl] - lat[1]) / (nl - 1)
+  dlo <- (lon[nc] - lon[1]) / (nc - 1)
+  fi <- (ll[, 2] - lat[1]) / dla + 1
+  fj <- if (wrap) { ((ll[, 1] - lon[1]) %% 360) / dlo + 1 } else { (ll[, 1] - lon[1]) / dlo + 1 }
+  good <- good & fi >= 1 & fi <= nl & (wrap | (fj >= 1 & fj <= nc))
+  fi <- pmin(pmax(fi, 1), nl)
+  i0 <- pmin(floor(fi), nl - 1)
+  ti <- fi - i0
+  j0 <- floor(fj)
+  tj <- fj - j0
+  if (wrap) {
+    j0 <- ((j0 - 1) %% nc) + 1
+    j1 <- (j0 %% nc) + 1
+  } else {
+    j0 <- pmin(pmax(j0, 1), nc - 1)
+    j1 <- j0 + 1
+    tj <- pmin(pmax(fj - j0, 0), 1)
+  }
+  a <- array(NA_real_, c(h, width, 3))
+  idx <- which(good)
+  for (k in 1:3) {
+    ch <- rgb[, , k]
+    v <- (1 - ti[idx]) * ((1 - tj[idx]) * ch[cbind(i0[idx], j0[idx])] + tj[idx] * ch[cbind(i0[idx], j1[idx])]) +
+        ti[idx] * ((1 - tj[idx]) * ch[cbind(i0[idx] + 1, j0[idx])] + tj[idx] * ch[cbind(i0[idx] + 1, j1[idx])])
+    ak <- rep(NA_real_, h * width)
+    ak[idx] <- v
+    a[, , k] <- matrix(ak, h, width)
+  }
+  a
+}
+
+project_rgb <- function(rgb, lat, lon, width, cfg = SILUCARB, wrap = TRUE) {
+  if (isTRUE(cfg$view$fast_eqc)) {
+    return(.project_rgb_eqc(rgb, lat, lon, width, cfg))
+  }
+  xl <- view_xlim(cfg); yl <- view_ylim(cfg)
+  a <- NULL
+  # Winkel tripel: terra / GDAL do not accept the whole-earth window, so the map pixels are sampled directly
+  if (!(is.null(cfg$view) && .proj_name(cfg) == "winkel_tripel")) {
+    a <- tryCatch(.project_rgb_terra(rgb, lat, lon, width, cfg, wrap), error = function(e) { NULL })
+  }
+  if (is.null(a)) {
+    a <- .project_rgb_inverse(rgb, lat, lon, width, cfg, wrap)
+  }
   # keep only what lies inside the map outline (ellipse, Robinson outline, globe disc ...)
   xc <- seq(xl[1], xl[2], length.out = dim(a)[2] + 1); xc <- (xc[-1] + xc[-length(xc)]) / 2
   yc <- seq(yl[2], yl[1], length.out = dim(a)[1] + 1); yc <- (yc[-1] + yc[-length(yc)]) / 2
@@ -360,7 +458,12 @@ draw_graticule <- function(cfg = SILUCARB) {
 draw_graticule_regional <- function(cfg) {
   xl <- cfg$view$xlim; yl <- cfg$view$ylim
   step <- { w <- diff(xl) / 1000; if (w < 2500) 5 else if (w < 7000) 10 else 20 }
-  col <- adjustcolor("white", 0.55); la <- seq(-90, 90, 0.5); lo <- seq(-180, 180, 0.5)
+  # line points dense enough that a label falls within 5 % of the frame edge also on small windows
+  dd <- max(0.02, min(0.5, diff(xl) / 1000 / 111 / 40))
+  col <- adjustcolor("white", 0.55); lo <- seq(-180, 180, dd)
+  fr <- .inv(cfg, rep(seq(xl[1], xl[2], length.out = 15), 15), rep(seq(yl[1], yl[2], length.out = 15), each = 15))
+  lat_rng <- range(fr[, 2], na.rm = TRUE)
+  la <- if (all(is.finite(lat_rng))) { seq(max(-90, lat_rng[1] - 2), min(90, lat_rng[2] + 2), dd) } else { seq(-90, 90, dd) }
   inside <- function(xy) !is.na(xy[, 1]) & xy[, 1] >= xl[1] & xy[, 1] <= xl[2] & xy[, 2] >= yl[1] & xy[, 2] <= yl[2]
   lab <- list()
   for (m in seq(-180, 180 - step, step)) {
@@ -455,12 +558,19 @@ cached_grid_to_model <- function(age, dem, model, cfg = SILUCARB) {
   if (model == "scotese_and_wright2018") return(list(z = dem$z, lat = dem$lat, lon = dem$lon))
   dir <- file.path(cfg$dir_results, "cache"); dir.create(dir, showWarnings = FALSE, recursive = TRUE)
   inf <- file.info(dem$file)
-  f <- file.path(dir, sprintf("%s_%s_%s_v2.rds", model, tools::file_path_sans_ext(basename(dem$file)),
-                              format(as.numeric(inf$mtime) * 1000 + inf$size, scientific = FALSE)))
+  # the original and the corrected grid have the same file name: the folder is part of the cache name
+  src <- paste0(tools::file_path_sans_ext(basename(dem$file)), "_", substr(.md5_text(dirname(normalizePath(dem$file, winslash = "/"))), 1, 8))
+  f <- file.path(dir, sprintf("%s_%s_%s_v3.rds", model, src, format(as.numeric(inf$mtime) * 1000 + inf$size, scientific = FALSE)))
   if (file.exists(f)) return(readRDS(f))
-  old <- list.files(dir, paste0("^", model, "_", tools::file_path_sans_ext(basename(dem$file)), "_"), full.names = TRUE)
+  old <- list.files(dir, paste0("^", model, "_", src, "_"), full.names = TRUE)
   unlink(old)
   g <- grid_to_model(age, dem$z, dem$lat, dem$lon, model); saveRDS(g, f); g
+}
+.md5_text <- function(x) {
+  tf <- tempfile()
+  on.exit(unlink(tf), add = TRUE)
+  writeLines(x, tf, useBytes = TRUE)
+  unname(tools::md5sum(tf))
 }
 #' smooth the blocky coasts left by moving a regular grid between plate models
 smooth_transferred <- function(g, la, sigma_km = 40) {
@@ -556,6 +666,9 @@ draw_scale_bar <- function(cfg) {
   } else if (.is_disc(cfg)) {                     # round maps: scale at the centre, bar in the corner
     P <- c(xl[2] - 0.27 * W, yl[1] + 0.03 * H); P0 <- c(0, 0)
     ll <- cbind(cfg$view$lon0, if (abs(cfg$view$lat0) > 89) sign(cfg$view$lat0) * 89.9 else cfg$view$lat0); frac <- 0.15
+  } else if (isTRUE(cfg$view$fast_eqc)) {         # plain lon/lat preview: the scale holds only near the centre
+    P <- c(xl[2] - 0.30 * W, yl[1] + 0.06 * H); P0 <- c(mean(xl), mean(yl)); ll <- .inv(cfg, P0[1], P0[2])
+    if (!is.finite(ll[1, 2])) return(invisible()); frac <- 0.2
   } else {
     P <- c(xl[2] - 0.30 * W, yl[1] + 0.06 * H); ll <- .inv(cfg, P[1], P[2]); P0 <- P
     if (!is.finite(ll[1, 2])) return(invisible()); frac <- 0.2
@@ -570,7 +683,7 @@ draw_scale_bar <- function(cfg) {
   lab <- function(v) format(v, big.mark = ",", scientific = FALSE, trim = TRUE)
   halo_text(xs[c(1, 3, 5)], P[2] + 2.6 * h, c("0", lab(nice / 2), paste(lab(nice), "km")), adj = 0.5, cex = 0.6,
             col = "#1b1b1b", halo = "white", font = 1)
-  if (is.null(cfg$view) || .is_disc(cfg))
+  if (is.null(cfg$view) || .is_disc(cfg) || isTRUE(cfg$view$fast_eqc))
     halo_text(P[1] + len / 2, P[2] - 1.8 * h, if (is.null(cfg$view)) "scale at the equator, map centre" else "scale at the map centre", adj = 0.5, cex = 0.5,
               col = "#1b1b1b", halo = "white", font = 1)
 }
@@ -585,7 +698,7 @@ draw_scale_bar <- function(cfg) {
     render_precip_rgb(hs$z, lat, precip_on_grid(climate$f, lat, lon)) else
     if (identical(climate$layer, "temperature")) render_temp_rgb(hs$z, lat, .temp_on_map(climate, z, lat, lon)) else
     if (isTRUE(climate$layer %in% names(SCALAR_LAYERS)) && !is.null(climate$scale)) {
-      L <- climate$scale; vv <- .scalar_on_grid(climate$f[[L$field]], lat, lon) * .scalar_factor(L, climate$season)
+      L <- climate$scale; vv <- .scalar_on_grid(climate$f[[L$field]], lat, lon, L$type) * .scalar_factor(L, climate$season)
       render_scalar_rgb(render_rgb(hs$z, lat), hs$z, lat, vv, L) } else
     if (isTRUE(climate$layer %in% c("precipitation_change", "temperature_change")))
       render_change_rgb(hs$z, lat, change_on_grid(climate$f$change[[if (climate$layer == "temperature_change") "t0" else "precip"]], lat, lon),
@@ -602,6 +715,21 @@ draw_scale_bar <- function(cfg) {
       rgb_img <- overlay_ice_rgb(rgb_img, hs$z, lat, ic, climate$layer)
   }
   list(rgb = rgb_img, si_min = if (exists("si_min", inherits = FALSE)) si_min, si_max = if (exists("si_max", inherits = FALSE)) si_max, ic = ic)
+}
+
+.PANEL <- new.env(parent = emptyenv())
+# wraps a page's draw function so its panels are computed once for the PNG and re-used for the vector PDF
+.cached_page <- function(draw) {
+  force(draw)
+  store <- new.env(parent = emptyenv())
+  store$items <- list()
+  function() {
+    store$i <- 0L
+    old <- .PANEL$store
+    .PANEL$store <- store
+    on.exit(.PANEL$store <- old, add = TRUE)
+    draw()
+  }
 }
 
 draw_map_panel <- function(age, model, z, lat, lon, cfg = SILUCARB, corrected = TRUE, borders = TRUE,
@@ -622,25 +750,48 @@ draw_map_panel <- function(age, model, z, lat, lon, cfg = SILUCARB, corrected = 
     zs <- ifelse(z > 0, pmax(sm, pmin(z, 1)), z)  # land stays land, sea and coastline untouched
   }
   z0 <- z; lat0 <- lat; lon0 <- lon                  # the global grid (for the climate arrows)
-  if (isTRUE(cfg$view$fast_eqc)) {                 # Figure-tab preview (plain lon/lat view): shade the whole grid once,
-    hr <- list(z = z, lat = lat, lon = lon, wrap = TRUE)   # .project_rgb_eqc() then cuts out the window
-    hs <- hr
-  } else {
-    hr <- refine_for_view(z, lat, lon, cfg, width_px, detail)
-    hs <- if (identical(zs, z)) hr else refine_for_view(zs, lat, lon, cfg, width_px, detail)
+  # the same page is drawn twice (PNG, then vector PDF): the refined grid, colours and projected image of each
+  # panel are kept from the first drawing (see .cached_page)
+  st_ <- .PANEL$store
+  pkey <- paste(nrow(z), ncol(z), lat[1], lon[1], map_crs(cfg), width_px, detail, climate$layer, climate$season,
+      isTRUE(cfg$view$fast_eqc))
+  hit <- NULL
+  if (!is.null(st_)) {
+    st_$i <- st_$i + 1L
+    if (length(st_$items) >= st_$i && identical(st_$items[[st_$i]]$key, pkey)) {
+      hit <- st_$items[[st_$i]]
+    }
   }
-  z <- hr$z; lat <- hr$lat; lon <- hr$lon
-  ckey <- sprintf("rgb_%d_%d_%.5f_%.5f", nrow(z), ncol(z), lat[1], lon[1])
-  if (!is.null(rgb_cache) && exists(ckey, envir = rgb_cache, inherits = FALSE)) {
-    lr <- get(ckey, envir = rgb_cache)              # same map and layer as the last draw: re-use the colours and shading
+  if (!is.null(hit)) {
+    hr <- hit$hr
+    lr <- hit$lr
+    img <- hit$img
+    z <- hr$z; lat <- hr$lat; lon <- hr$lon
   } else {
-    lr <- .layer_rgb(climate, hs$z, z, lat, lon)
-    if (!is.null(rgb_cache)) {
-      assign(ckey, lr, envir = rgb_cache)
+    if (isTRUE(cfg$view$fast_eqc)) {                 # Figure-tab preview (plain lon/lat view): shade the whole grid once,
+      hr <- list(z = z, lat = lat, lon = lon, wrap = TRUE)   # .project_rgb_eqc() then cuts out the window
+      hs <- hr
+    } else {
+      hr <- refine_for_view(z, lat, lon, cfg, width_px, detail)
+      hs <- if (identical(zs, z)) hr else refine_for_view(zs, lat, lon, cfg, width_px, detail)
+    }
+    z <- hr$z; lat <- hr$lat; lon <- hr$lon
+    ckey <- sprintf("rgb_%d_%d_%.5f_%.5f", nrow(z), ncol(z), lat[1], lon[1])
+    if (!is.null(rgb_cache) && exists(ckey, envir = rgb_cache, inherits = FALSE)) {
+      lr <- get(ckey, envir = rgb_cache)              # same map and layer as the last draw: re-use the colours and shading
+    } else {
+      lr <- .layer_rgb(climate, hs$z, z, lat, lon)
+      if (!is.null(rgb_cache)) {
+        assign(ckey, lr, envir = rgb_cache)
+      }
+    }
+    rgb_img <- lr$rgb; si_min <- lr$si_min; si_max <- lr$si_max; ic <- lr$ic
+    img <- project_rgb(rgb_img, lat, lon, width_px, cfg, wrap = hr$wrap)
+    if (!is.null(st_)) {
+      st_$items[[st_$i]] <- list(key = pkey, hr = hr, lr = lr, img = img)
     }
   }
   rgb_img <- lr$rgb; si_min <- lr$si_min; si_max <- lr$si_max; ic <- lr$ic
-  img <- project_rgb(rgb_img, lat, lon, width_px, cfg, wrap = hr$wrap)
   rasterImage(img, xl[1], yl[1], xl[2], yl[2], interpolate = TRUE)
   if (!is.null(cs)) draw_ll_list(lapply(cs, function(p) data.frame(lon = p[, 1], lat = p[, 2])), cfg,
                                   col = adjustcolor("#5a1e10", 0.85), lwd = 0.6, lty = "22")
@@ -676,8 +827,10 @@ draw_map_panel <- function(age, model, z, lat, lon, cfg = SILUCARB, corrected = 
   # localities (points/localities.csv); sites = FALSE hides them, or give names
   loc <- read_localities(cfg)
   st_ <- if (is.null(sites) || isTRUE(sites)) loc[loc$show, ] else if (isFALSE(sites)) loc[0, ] else loc[loc$name %in% sites, ]
+  st_ <- st_[is.finite(st_$lat) & is.finite(st_$lon) & abs(st_$lat) <= 90, , drop = FALSE]   # a mistyped row is skipped
   if (nrow(st_)) {
-  s <- gp_reconstruct(st_$lat, st_$lon, rep(age, nrow(st_)), model)
+  s <- tryCatch(gp_reconstruct(st_$lat, st_$lon, rep(age, nrow(st_)), model), error = function(e) {
+    data.frame(plat = rep(NA_real_, nrow(st_)), plon = rep(NA_real_, nrow(st_))) })
   okp <- is.finite(s$plat); s <- s[okp, , drop = FALSE]; st_ <- st_[okp, , drop = FALSE]
   }
   if (nrow(st_)) {
@@ -704,14 +857,13 @@ draw_map_panel <- function(age, model, z, lat, lon, cfg = SILUCARB, corrected = 
     halo_text(xy[i, 1] + if (right[i]) -off else off, ly[i], labs[i], adj = if (right[i]) 1 else 0)
   }
   handles <- NULL
-  if (isTRUE(equator)) handles <- data.frame(label = "Equator", pch = NA, bg = NA, col = "#e0b100", lty = 3, lwd = 1.6)
+  if (isTRUE(equator)) handles <- data.frame(label = "Equator", pch = NA, bg = NA, col = "#ffd54a", lty = "44", lwd = 1.6)
   if (length(ind_kinds) || isTRUE(ice_front)) {
     d <- records_for_age(age, model, purpose = "indicator", recs = recs, cfg = cfg)
     d <- d[!duplicated(paste(d$indicator, round(d$lat, 4), round(d$lon, 4))), ]   # one symbol per site
     for (k in ind_kinds) {
       e <- d[d$indicator == k, ]; st <- IND_STYLE[[k]]
-      if (nrow(e)) points(sf_project("EPSG:4326", map_crs(cfg), cbind(e$plon, e$plat), keep = TRUE, warn = FALSE),
-                          pch = st$pch, bg = st$bg, col = st$col, cex = st$cex, lwd = 0.6)
+      if (nrow(e)) points(.visible_xy(e$plon, e$plat, cfg), pch = st$pch, bg = st$bg, col = st$col, cex = st$cex, lwd = 0.6)
       if (nrow(e)) handles <- rbind(handles, data.frame(label = sprintf("%s (%d)", st$label, nrow(e)), pch = st$pch,
                                            bg = st$bg, col = st$col, lty = NA, lwd = 0.6))
     }
@@ -720,14 +872,14 @@ draw_map_panel <- function(age, model, z, lat, lon, cfg = SILUCARB, corrected = 
       front <- g$plat[which.min(abs(g$plat))]; lo <- seq(-180, 180, 1)
       draw_ll(lo, rep(front, length(lo)), col = "#6fd0ff", lwd = 2, lty = "62", cfg = cfg)   # one line object
       handles <- rbind(handles, data.frame(label = sprintf("Ice front from glacial deposits (%.0f\u00b0%s)",
-                       abs(front), ifelse(front < 0, "S", "N")), pch = NA, bg = NA, col = "#6fd0ff", lty = 2, lwd = 2))
+                       abs(front), ifelse(front < 0, "S", "N")), pch = NA, bg = NA, col = "#6fd0ff", lty = "62", lwd = 2))
     }
   }
   if (isTRUE(user_points)) {                           # your own points (any setting)
     u <- recs[recs$source == "user", ]
     if (!is.null(u) && nrow(u)) {
       uu <- records_for_age(age, model, purpose = "dem", recs = u, cfg = cfg)
-      if (nrow(uu)) points(sf_project("EPSG:4326", map_crs(cfg), cbind(uu$plon, uu$plat), keep = TRUE, warn = FALSE),
+      if (nrow(uu)) points(.visible_xy(uu$plon, uu$plat, cfg),
                            pch = USER_STYLE$pch, bg = USER_STYLE$bg, col = USER_STYLE$col, cex = USER_STYLE$cex, lwd = 0.7)
       if (nrow(uu)) handles <- rbind(handles, data.frame(label = sprintf("Your points (%d)", nrow(uu)), pch = USER_STYLE$pch,
                                            bg = USER_STYLE$bg, col = USER_STYLE$col, lty = NA, lwd = 0.7))
@@ -802,15 +954,19 @@ map_center <- function(center, age, model, cfg = SILUCARB) {
 }
 .region_tag <- function(region) {
   if (is.null(region)) return("")
-  if (is.numeric(region)) return(sprintf("_region%+.0f%+.0f%+.0f%+.0f", region[1], region[2], region[3], region[4]))
+  if (is.numeric(region)) return(sprintf("_region%+.1f%+.1f%+.1f%+.1f", region[1], region[2], region[3], region[4]))
   cc <- if (!is.null(region$center_palaeo)) sprintf("p%.1fN%.1fE", region$center_palaeo[1], region$center_palaeo[2]) else
         if (is.character(region$center)) region$center else sprintf("%gN%gE", region$center[1], region$center[2])
-  sprintf("_region-%s-%gx%gkm", cc, round(region$width_km %||% 4000),
+  sprintf("_region-%s-%gx%gkm", .file_safe(cc), round(region$width_km %||% 4000),
           round(region$height_km %||% (0.6 * (region$width_km %||% 4000))))
+}
+# a name usable in file names on every system (locality names may hold / : * ? " < > | or spaces)
+.file_safe <- function(x) {
+  gsub("^-+|-+$", "", gsub("[^A-Za-z0-9.-]+", "-", x))
 }
 .center_tag <- function(center) {
   if (is.null(center)) return("")
-  if (is.character(center)) return(paste0("_centre-", center))
+  if (is.character(center)) return(paste0("_centre-", .file_safe(center)))
   if (length(center) == 1) return(sprintf("_centre%g", center))
   sprintf("_centre%gN%gE", center[1], center[2])
 }
@@ -919,7 +1075,10 @@ map_center <- function(center, age, model, cfg = SILUCARB) {
   }
   if (isTRUE(sea_ice) && model == "scotese_and_wright2018") {   # permanent / seasonal sea ice
     ist <- if (!is.null(ice)) ice_snapshot(ice$id, ice$t_kyr, cfg)
-    si <- tryCatch(sea_ice_for_map(map %||% age, climate_method, experiment, cfg, ist),
+    # with the original PaleoDEM, the link between land ice and permanent sea ice uses that map too
+    si_map <- map %||% (if (corrected) { age } else {
+      climate_map(age, file = find_dem(cfg$dir_dem, age), name = "original PaleoDEM", cfg = cfg) })
+    si <- tryCatch(sea_ice_for_map(si_map, climate_method, experiment, cfg, ist),
                    error = function(e) { message("sea ice: ", conditionMessage(e)); NULL })
     if (!is.null(si)) { if (is.null(clim)) clim <- list(layer = layer, wind = FALSE, currents = FALSE, season = season); clim$sea_ice <- si }
   }
@@ -980,6 +1139,8 @@ make_maps <- function(ages = SILUCARB$ages, model = "scotese_and_wright2018", co
                    if (borders) "_borders" else "", if (modern_coast && !borders) "_moderncoast" else "",
                    if (shoreline) "_shoreline" else "", .region_tag(region),
                    .center_tag(center), if ((is.null(region) || overview) && cfg$map_projection != "mollweide") paste0("_", cfg$map_projection) else "",
+                   if ((is.null(region) || overview) && grepl("polar", cfg$map_projection) && !is.null(cfg$polar_edge_lat))
+                     sprintf("_edge%g", cfg$polar_edge_lat) else "",
                    if (!is.null(region) && overview) "_overview" else "",
                    if (use_clim || isTRUE(sea_ice)) paste0(if (layer == "precipitation") "_precip" else "", if (isTRUE(wind)) "_wind" else "",
                                         if (isTRUE(currents)) "_currents" else "", if (season != "ann") paste0("_", season) else "",
@@ -1028,9 +1189,9 @@ make_maps <- function(ages = SILUCARB$ages, model = "scotese_and_wright2018", co
       draw <- local({ age_ <- age; cfg_ <- cfg_a; g_ <- g; cs_ <- cs; op_ <- ocean_pct; cl_ <- clims
         function() draw_season_page(age_, model, g_, cfg_, cs_, op_, corrected, borders, modern_coast, indicators, recs,
                                     user_points, sites, center, equator, cfg, cl_, detail = detail, ice_front = ice_front) })
+      draw <- .cached_page(draw)
       ph <- if (is.null(cfg_a$view)) 7.6 else 9
-      png(f, width = 11, height = ph, units = "in", res = cfg$map_dpi, type = "cairo", bg = "white")
-      draw(); dev.off(); pngs <- c(pngs, f); message(f)
+      .render_png(f, 11, ph, cfg$map_dpi, draw); pngs <- c(pngs, f); message(f)
       pages[[length(pages) + 1]] <- list(draw = draw, h = ph)
       next
     }
@@ -1039,6 +1200,25 @@ make_maps <- function(ages = SILUCARB$ages, model = "scotese_and_wright2018", co
       cfg_g <- cfg; cfg_g$central_lon <- map_center(center, age, model, cfg)
       cfg_g$view <- projection_view(center, age, model, cfg)
       if (!is.null(cfg_g$view)) cfg_g$central_lon <- cfg_g$view$lon0
+      if (is.null(center) && !is.null(cfg_g$view) && !is.null(cfg_a$view)) {
+        # a globe or polar overview is turned towards the zoomed-in area, otherwise its box can be on the far side
+        pn <- .proj_name(cfg_g)
+        cfg_g$central_lon <- cfg_a$view$lon0
+        if (pn %in% c("south_polar", "north_polar")) {
+          cfg_g$map_projection <- if (cfg_a$view$lat0 < 0) { "south_polar" } else { "north_polar" }
+        }
+        cfg_g$view <- projection_view(NULL, age, model, cfg_g)
+        if (pn == "orthographic") {
+          la0 <- cfg_a$view$lat0
+          lo0 <- cfg_a$view$lon0
+          cfg_g$view$crs <- sprintf("+proj=ortho +lat_0=%g +lon_0=%g +R=%d +units=m +no_defs", la0, lo0, 6371000)
+          cfg_g$view$lat0 <- la0
+          cfg_g$view$lon0 <- lo0
+          cfg_g$view$label <- sprintf("globe centred on %.0f\u00b0%s, %.0f\u00b0%s", abs(la0), if (la0 < 0) { "S" } else { "N" },
+              abs(lo0), if (lo0 < 0) { "W" } else { "E" })
+        }
+        cfg_g$central_lon <- cfg_g$view$lon0
+      }
       if (is.null(center) && is.null(cfg_g$view) && !is.null(cfg_a$view)) {   # box across the edge of the whole-earth map: centre it on the box
         ol <- .view_outline_ll(cfg_a$view)$line; ok <- is.finite(ol$lon)
         rel <- ((ol$lon[ok] - cfg_g$central_lon + 180) %% 360) - 180
@@ -1057,8 +1237,8 @@ make_maps <- function(ages = SILUCARB$ages, model = "scotese_and_wright2018", co
                                detail = detail, north_arrow = north_arrow, scale_bar = scale_bar, ice_front = ice_front,
                                bar_pos = colour_bar_pos, climate = cl_)
     })
-    png(f, width = 11, height = ph, units = "in", res = cfg$map_dpi, type = "cairo", bg = "white")
-    draw(); dev.off(); pngs <- c(pngs, f); message(f)
+    draw <- .cached_page(draw)
+    .render_png(f, 11, ph, cfg$map_dpi, draw); pngs <- c(pngs, f); message(f)
     pages[[length(pages) + 1]] <- list(draw = draw, h = ph)
   }
   if (comparison) {
@@ -1066,12 +1246,14 @@ make_maps <- function(ages = SILUCARB$ages, model = "scotese_and_wright2018", co
     draw <- function() draw_comparison(comparison_age, corrected, borders, modern_coast, indicators, recs, cfg,
                                        user_points = user_points, sites = sites, center = center, equator = equator,
                                        ice_front = ice_front, bar_pos = colour_bar_pos)
-    png(f, width = 11, height = 7.4, units = "in", res = 200, type = "cairo", bg = "white")
-    draw(); dev.off(); pngs <- c(pngs, f)
+    draw <- .cached_page(draw)
+    .render_png(f, 11, 7.4, 200, draw); pngs <- c(pngs, f)
     pages[[length(pages) + 1]] <- list(draw = draw, h = 7.4)
   }
-  pdf_file <- file.path(cfg$dir_maps, if (all(ages >= 410 & ages <= 450)) sprintf("Silurian_topographic_maps%s.pdf", suffix) else
-    sprintf("topographic_maps_%s-%sMa%s.pdf", format(min(ages)), format(max(ages)), suffix))
+  pdf_file <- file.path(cfg$dir_maps, if (length(ages) == 1) { sprintf("topo_%sMa_%s%s.pdf", format(ages), tag,
+      sub(paste0("_", model), "", suffix, fixed = TRUE)) } else if (all(ages >= 410 & ages <= 450)) {
+      sprintf("Silurian_topographic_maps%s.pdf", suffix) } else {
+      sprintf("topographic_maps_%s-%sMa%s.pdf", format(min(ages)), format(max(ages)), suffix) })
   if (pdf == "raster") pngs_to_pdf(pngs, pdf_file) else pages_to_vector_pdf(pages, pdf_file)
   invisible(structure(pdf_file, pngs = pngs))
 }
@@ -1265,33 +1447,84 @@ draw_comparison <- function(age, corrected, borders, modern_coast, indicators, r
   par(fig = .pf(L$bar), new = TRUE, mar = c(0, 0, 0, 0)); plot.new(); colour_bar(L$side)
 }
 make_comparison <- function(age, file, ...) {           # PNG of the comparison panel
-  png(file, width = 11, height = 7.4, units = "in", res = 200, type = "cairo", bg = "white")
-  draw_comparison(age, ...); dev.off()
+  .render_png(file, 11, 7.4, 200, function() { draw_comparison(age, ...) })
 }
 
 #' editable PDF: every page drawn again on a vector device (cairo_pdf: unicode text,
 #' vector lines / points / text; the shaded topography stays an embedded image)
 pages_to_vector_pdf <- function(pages, pdf_file) {
   H <- max(vapply(pages, function(p) p$h, 0))
-  grDevices::cairo_pdf(pdf_file, width = 11, height = H, onefile = TRUE, bg = "white")
-  on.exit({ .PAGE$y <- c(0, 1) })
+  .clear_output(pdf_file)
+  dv <- .open_device(function() { grDevices::cairo_pdf(pdf_file, width = 11, height = H, onefile = TRUE, bg = "white") },
+      function() { grDevices::pdf(pdf_file, width = 11, height = H, onefile = TRUE, bg = "white", encoding = "WinAnsi",
+          useDingbats = FALSE) })
+  on.exit({
+    .PAGE$y <- c(0, 1)
+    if (dv %in% grDevices::dev.list()) {
+      grDevices::dev.off(dv)
+    }
+  }, add = TRUE)
   for (k in seq_along(pages)) {                         # each page's first plot.new() starts a new sheet
     h <- pages[[k]]$h / H; .PAGE$y <- c((1 - h) / 2, (1 + h) / 2)
     pages[[k]]$draw()
   }
-  dev.off(); message(pdf_file)
+  message(pdf_file)
+}
+
+# Removes an old output file first; on Windows a PDF or PNG that is open in a viewer is locked
+.clear_output <- function(file) {
+  if (file.exists(file) && !isTRUE(suppressWarnings(file.remove(file)))) {
+    stop(basename(file), " is open in another program (e.g. a PDF viewer): close it and render again", call. = FALSE)
+  }
+  invisible(file)
+}
+
+# Opens a graphics device with open_fun, or with fallback when that fails (e.g. no cairo); returns its number
+.open_device <- function(open_fun, fallback) {
+  ok <- tryCatch({
+    open_fun()
+    TRUE
+  }, error = function(e) { FALSE })
+  if (!ok) {
+    fallback()
+  }
+  grDevices::dev.cur()
+}
+
+# Draws one PNG page; the device is always closed, also when drawing fails
+.render_png <- function(file, width, height, res, draw) {
+  .clear_output(file)
+  dv <- .open_device(function() {
+    grDevices::png(file, width = width, height = height, units = "in", res = res, type = "cairo", bg = "white")
+  }, function() {
+    grDevices::png(file, width = width, height = height, units = "in", res = res, bg = "white")
+  })
+  on.exit({
+    if (dv %in% grDevices::dev.list()) {
+      grDevices::dev.off(dv)
+    }
+  }, add = TRUE)
+  draw()
+  invisible(file)
 }
 
 #' PDF made of raster pages (thin lines never disappear in PDF viewers)
 pngs_to_pdf <- function(pngs, pdf_file) {
+  .clear_output(pdf_file)
   pdf(pdf_file, width = 11, height = 7.4, onefile = TRUE)
+  dv <- grDevices::dev.cur()
+  on.exit({
+    if (dv %in% grDevices::dev.list()) {
+      grDevices::dev.off(dv)
+    }
+  }, add = TRUE)
   for (f in pngs) {
     im <- readPNG(f); asp <- dim(im)[1] / dim(im)[2]
     par(mar = c(0, 0, 0, 0)); plot.new(); plot.window(c(0, 1), c(0, 1), xaxs = "i", yaxs = "i")
     h <- min(1, asp * 11 / 7.4); w <- h / (asp * 11 / 7.4)
     rasterImage(im, (1 - w) / 2, (1 - h) / 2, (1 + w) / 2, (1 + h) / 2, interpolate = TRUE)
   }
-  dev.off(); message(pdf_file)
+  message(pdf_file)
 }
 
 #' near-surface temperature on the map grid, with the lapse-rate correction to the map heights

@@ -123,7 +123,7 @@ present-day and palaeo-coordinates.
 
 Points clicked on the palaeo-map are stored with their plate, so they move with it at other ages. The **Your
 points** table lists them; select rows and press **Delete selected points**, or use the click action **Delete
-nearest of YOUR points**. **Undo last change** reverts the last addition or edit.
+nearest of YOUR points**. **Undo last change** puts your points and edits back as they were before the last change made in the editor (repeat it to go back further).
 
 ### 4.4 Switch off wrong database records
 
@@ -133,8 +133,8 @@ remove them. Use this for records that are clearly mislocated or misclassified (
 
 ### 4.5 Rebuild the corrected grid
 
-Your points and edits only change the map after a rebuild. Press **Rebuild this age** (7): it takes about a
-minute, and the status line reports the records used, the seaways added, the seas still isolated (should be 0) and
+Your points and edits only change the map after a rebuild. Press **Rebuild this age** (7): it takes 1 to 3
+minutes, and the status line reports the records used, the seaways added, the seas still isolated (should be 0) and
 the ocean area. **Rebuild the Silurian ages** rebuilds 445–415 Ma at once on several cores. The **Statistics** tab
 lists the results of all rebuilt ages. Then switch the background grid to **Corrected** to see the new map.
 
@@ -233,7 +233,7 @@ explanations are in `inst/app/R/config.R` of the package source.
 | "Could not save … – the file is locked" | A CSV in `points/` is open in Excel (or read-only). Close it and try again. |
 | The setup ends with "Not complete yet: …" | A download failed (server busy or connection lost). Run the setup again: finished steps are skipped and only the missing parts are fetched. |
 | The climate layer is empty / "could not be downloaded" | Ages outside the prepared ones need internet the first time. The files are kept afterwards. |
-| The editor does not open in the browser | From R, look in the console for the address (http://127.0.0.1:…) and open it by hand. With the launcher, see `state/setup_log.txt`. |
+| The editor does not open in the browser | From R, look in the console for the address (http://127.0.0.1:…) and open it by hand. With the launcher, see `state/setup_log.txt` and `state/app_log.txt`. |
 | Python / pyGPlates errors at the start | Restart R and run `pm_setup()` (or SETUP.bat) again. To start Python from scratch, delete the `paleomapeditor\venv` folder named in section 2. If uv fails, the setup tries a conda environment "paleomap". |
 | A package fails to install | Update R and run the setup again. On Linux, sf and terra need the GDAL, GEOS, PROJ and udunits system libraries. |
 | Corporate network or proxy | The setup needs cloud.r-project.org, github.com, pypi.org, earthbyte.org, zenodo.org, paleobiodb.org, macrostrat.org and paleo.bristol.ac.uk. Ask IT, or run the setup once on another network. |

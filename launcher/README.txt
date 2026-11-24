@@ -24,14 +24,14 @@ What is in this folder
   points\    your work: user_points.csv, record_edits.csv, localities.csv, settings.csv (plain CSV files)
   maps\      rendered maps (PNG and PDF)
   results\   statistics of the corrected grids
-  state\     logs of the setup and of updates
+  state\     logs of the setup, of updates and of the running editor (app_log.txt)
 
 Updates
   Once a day PaleoMapR checks GitHub for a newer version and offers "Update and restart". About > Check for
   updates checks at once. Running SETUP.bat again also updates. Your data and points are kept.
 
 Problems, questions, ideas
-  https://github.com/stratigraphy/PaleoMapR/issues   (state\setup_log.txt and state\update_log.txt help)
+  https://github.com/stratigraphy/PaleoMapR/issues   (state\setup_log.txt, state\update_log.txt and state\app_log.txt help)
   Manual and tutorial: https://stratigraphy.github.io/PaleoMapR/
 
 Remove

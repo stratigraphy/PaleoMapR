@@ -174,9 +174,10 @@ climate_for_map <- function(map, season = "ann", method = c("model", "local", "r
     P0 <- pmax(.to_1deg(cl$precip), 0)
     cl$precip <- lc$precip; cl$wind_u <- lc$wind_u; cl$wind_v <- lc$wind_v
     cl <- .water_balance(cl, lc$precip$z - P0)
-    cl$temp <- .fld(T1 - 6.5 * (smooth_km(g_c$h, GRID1$lat, 100) - smooth_km(g_o$h, GRID1$lat, 100)) / 1000)   # lapse rate for changed relief
+    # temperature: the model field stays as it is and refers to the model's own terrain (temp_href, set
+    # above); the map figure brings it to your map's heights with the lapse rate chosen there (0 = off),
+    # so both climate options agree where the geography is unchanged
     cl$method <- "local"; cl$r2 <- lc$r2
-    cl$temp_href <- .fld(smooth_km(g_c$h, GRID1$lat, 100))
   }
   cl
 }
@@ -184,11 +185,18 @@ climate_for_map <- function(map, season = "ann", method = c("model", "local", "r
 #' P - E and runoff on the 1-degree grid, changed by dPE (mm/day, change of P - E); runoff on
 #' land the model did not have is taken as P - E (long-term water balance), never below 0
 .water_balance <- function(cl, dPE) {
-  pme <- .to_1deg(cl$pme); pme[!is.finite(pme)] <- 0
+  pme <- .to_1deg(cl$pme)
+  pme[!is.finite(pme)] <- 0
   ro <- .to_1deg(cl$runoff)
+  dPE <- rep_len(as.vector(dPE), length(pme))
+  dPE[!is.finite(dPE)] <- 0
   pme <- pme + dPE
-  ro[!is.finite(ro)] <- pmax(pme[!is.finite(ro)], 0)
-  cl$pme <- .fld(pme); cl$runoff <- .fld(pmax(ro + dPE, 0))
+  # model runoff changes by dPE; where the model had no land, runoff is the new P - E (dPE is already in it)
+  no_ro <- !is.finite(ro)
+  ro[!no_ro] <- ro[!no_ro] + dPE[!no_ro]
+  ro[no_ro] <- pme[no_ro]
+  cl$pme <- .fld(pme)
+  cl$runoff <- .fld(pmax(ro, 0))
   cl
 }
 

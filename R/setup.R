@@ -147,7 +147,7 @@ pm_python_test <- function(folder) {
   tf <- tempfile(fileext = ".R")
   on.exit(unlink(tf), add = TRUE)
   writeLines(c(sprintf(".libPaths(%s)", paste(deparse(.libPaths()), collapse = "")),
-      sprintf("pm <- PaleoMapR::pm_load('%s')", folder),
+      sprintf("pm <- PaleoMapR::pm_load(%s)", deparse(folder)),
       "m <- pm$gp_init()",
       "p <- reticulate::import('pygplates')",
       "cat('PYGPLATES_OK', reticulate::py_config()$python, '\\n')"), tf)

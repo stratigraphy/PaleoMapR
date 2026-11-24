@@ -78,12 +78,19 @@ def _plate_ids(partitioner, lat, lon):
     return pid
 
 
+def _ll_key(lat, lon):
+    """one exact integer per position (1e-5 degree), so two different points never share a key"""
+    la = np.round((np.asarray(lat, float) + 90.0) * 1e5).astype(np.int64)
+    lo = np.round(np.mod(np.asarray(lon, float) + 180.0, 360.0) * 1e5).astype(np.int64)
+    return la * np.int64(40000000) + lo
+
+
 def _plate_ids_fast(partitioner, lat, lon, chunk=20000):
     """plate ids for many points: partition MultiPoints and map pieces back to the
     input points by their (rounded) coordinates; leftovers fall back to point tests"""
     n = len(lat)
     pid = np.full(n, -1, dtype=np.int64)
-    key = np.round(lat, 6) * 1e7 + np.round(np.mod(lon + 180.0, 360.0), 6)
+    key = _ll_key(lat, lon)
     order = np.argsort(key); skey = key[order]
     for s in range(0, n, chunk):
         e = min(s + chunk, n)
@@ -94,16 +101,16 @@ def _plate_ids_fast(partitioner, lat, lon, chunk=20000):
             p = poly.get_feature().get_reconstruction_plate_id()
             for g in pieces:
                 ll = g.to_lat_lon_array()
-                k = np.round(ll[:, 0], 6) * 1e7 + np.round(np.mod(ll[:, 1] + 180.0, 360.0), 6)
+                k = _ll_key(ll[:, 0], ll[:, 1])
                 pos = np.searchsorted(skey, k)
                 pos = np.clip(pos, 0, n - 1)
-                ok = np.abs(skey[pos] - k) < 1e-3
+                ok = skey[pos] == k
                 pid[order[pos[ok]]] = p
         for g in unpart:
             ll = g.to_lat_lon_array()
-            k = np.round(ll[:, 0], 6) * 1e7 + np.round(np.mod(ll[:, 1] + 180.0, 360.0), 6)
+            k = _ll_key(ll[:, 0], ll[:, 1])
             pos = np.clip(np.searchsorted(skey, k), 0, n - 1)
-            ok = np.abs(skey[pos] - k) < 1e-3
+            ok = skey[pos] == k
             sel = order[pos[ok]]
             pid[sel[pid[sel] < 0]] = 0
     left = np.where(pid < 0)[0]
@@ -120,13 +127,33 @@ def reconstruct(lat, lon, ages, model="scotese_and_wright2018"):
     ages = np.broadcast_to(np.atleast_1d(np.asarray(ages, float)), lat.shape).copy()
     rot, sp = _load(model)
     part = pygplates.PlatePartitioner(sp, rot, 0.0)
-    pid = _plate_ids(part, lat, lon)
+    pid, born = _plate_ids_born(part, lat, lon)
+    # crust whose polygon only begins after the map age (e.g. a later accreted terrane) has no position then
+    young = (pid > 0) & (born < ages)
     out_la = np.full(len(lat), np.nan); out_lo = np.full(len(lat), np.nan)
     for a in np.unique(ages):
         m = ages == a
         la, lo = _rotate_groups(lat[m], lon[m], pid[m], rot, a, 0.0)
         out_la[m] = la; out_lo[m] = lo
-    return _out({"lat": out_la, "lon": out_lo, "plate_id": pid})
+    out_la[young] = np.nan; out_lo[young] = np.nan
+    return _out({"lat": out_la, "lon": out_lo, "plate_id": pid, "not_yet": young.astype(np.int64)})
+
+
+def _plate_ids_born(partitioner, lat, lon):
+    """plate id of every point and the begin time of its polygon (inf when always valid)"""
+    pid = np.zeros(len(lat), dtype=np.int64)
+    born = np.full(len(lat), np.inf)
+    for k, (la, lo) in enumerate(zip(lat, lon)):
+        r = partitioner.partition_point(pygplates.PointOnSphere(float(la), float(lo)))
+        if r is not None:
+            f = r.get_feature()
+            pid[k] = f.get_reconstruction_plate_id()
+            try:
+                b = f.get_valid_time()[0]
+                born[k] = float(b) if np.isfinite(float(b)) else np.inf
+            except Exception:
+                born[k] = np.inf
+    return pid, born
 
 
 def to_present(plat, plon, age, model="scotese_and_wright2018"):

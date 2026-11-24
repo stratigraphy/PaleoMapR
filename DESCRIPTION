@@ -1,7 +1,7 @@
 Package: PaleoMapR
 Type: Package
 Title: Point-and-Click Editor for Fossil-Corrected Paleogeographic Maps
-Version: 0.1.0
+Version: 0.1.1
 Authors@R: person(given = "Michiel", family = "Arts", role = c("aut", "cre"),
     email = "michiel.arts@stratigraphy.eu", comment = c(ORCID = "0000-0003-3181-4608"))
 Description: Opens a 'shiny' application in the web browser that checks the

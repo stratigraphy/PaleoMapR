@@ -74,7 +74,9 @@ gp_init <- function(cfg = SILUCARB) {
 gp_reconstruct <- function(lat, lon, ages, model = "scotese_and_wright2018") {
   if (!length(lat)) return(data.frame(plat = numeric(0), plon = numeric(0), plate_id = integer(0)))
   r <- gp_init()$reconstruct(as.numeric(lat), as.numeric(lon), as.numeric(ages), model)
-  data.frame(plat = as.numeric(r$lat), plon = as.numeric(r$lon), plate_id = as.integer(r$plate_id))
+  out <- data.frame(plat = as.numeric(r$lat), plon = as.numeric(r$lon), plate_id = as.integer(r$plate_id))
+  out$not_yet <- if (is.null(r$not_yet)) { rep(FALSE, nrow(out)) } else { as.integer(r$not_yet) == 1L }
+  out
 }
 
 #' palaeo-positions at `age` -> present day (for points you click on a palaeo map)

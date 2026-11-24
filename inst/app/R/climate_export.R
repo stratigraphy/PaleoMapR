@@ -195,7 +195,7 @@ sea_ice_for_map <- function(map, method = "local", experiment = NULL, cfg = SILU
   m <- tryCatch(climate_map(map, cfg = cfg), error = function(e) NULL)
   resp <- if (method == "rerun" && !is.null(m)) .speedy_monthly_response(m, experiment, "sea_ice", cfg)
   mon <- lapply(1:12, function(k) {
-    x <- .read_clim_var(mf[k], "iceconc_mm_srf"); x$z[!is.finite(x$z)] <- 0
+    x <- .read_clim_var(mf[k], "iceconc_mm_srf"); x$z <- .extend_field(x$z, 40); x$z[!is.finite(x$z)] <- 0   # land: nearby sea (not 0), so new seaways and coasts keep their ice
     if (!is.null(resp)) {
       g <- expand.grid(lon = x$lon, lat = x$lat)
       x$z <- x$z + matrix(clim_interp(.speedy_out_field(resp[, , k]), g$lat, g$lon), length(x$lat), length(x$lon), byrow = TRUE)
@@ -255,7 +255,7 @@ sea_ice_caption <- function(si) {
 
 #' the 12 monthly HadCM3L ocean files of the run for an age (downloaded once, ~6 MB)
 climate_month_files_ocean <- function(age, cfg = SILUCARB) {
-  e <- climate_exp(age); d <- file.path(cfg$dir_data, "climate", e$id)
+  e <- climate_exp(age); d <- .climate_dir(e, cfg)
   f <- file.path(d, sprintf("%so.pfcl%s.nc", e$id, .MONTHS))
   for (k in seq_along(f)) .fetch_retry(sprintf(CLIMATE_URL, e$id, basename(f[k])), f[k])
   if (!all(file.exists(f))) stop("monthly ocean files for ", age, " Ma could not be downloaded", call. = FALSE)
